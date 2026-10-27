@@ -15,6 +15,7 @@ describe('SQLite schema and migrations (2.1)', () => {
     expect(names).toContain('book');
     expect(names).toContain('book_collection');
     expect(names).toContain('metadata_cache');
+    expect(names).toContain('series_config');
     expect(names).toContain('book_fts');
 
     const cols = db.prepare('PRAGMA table_info(book)').all() as Array<{
@@ -23,12 +24,15 @@ describe('SQLite schema and migrations (2.1)', () => {
     const colNames = cols.map((c) => c.name);
     expect(colNames).toContain('publisher');
     expect(colNames).toContain('cover_path');
+    expect(colNames).toContain('series');
+    expect(colNames).toContain('series_key');
+    expect(colNames).toContain('volume_number');
     db.close();
   });
 
-  it('migrates an existing v1 database by adding publisher and cover_path and rebuilding book_fts', () => {
+  it('migrates an existing v1 database by adding publisher, cover_path, series, series_key, volume_number and rebuilding book_fts without data loss', () => {
     const db = openDatabase(':memory:');
-    // Simulate a legacy v1 database without publisher and cover_path
+    // Simulate a legacy v1 database without publisher, cover_path, series, series_key, volume_number
     db.exec(`
       DROP TRIGGER IF EXISTS book_ai;
       DROP TRIGGER IF EXISTS book_ad;
@@ -73,11 +77,16 @@ describe('SQLite schema and migrations (2.1)', () => {
     const colNames = cols.map((c) => c.name);
     expect(colNames).toContain('publisher');
     expect(colNames).toContain('cover_path');
+    expect(colNames).toContain('series');
+    expect(colNames).toContain('series_key');
+    expect(colNames).toContain('volume_number');
 
-    db.prepare('UPDATE book SET publisher = ? WHERE id = 1').run('Dargaud');
+    db.prepare(
+      'UPDATE book SET publisher = ?, series = ?, series_key = ?, volume_number = ? WHERE id = 1',
+    ).run('Dargaud', 'Une aventure d’Astérix', 'une aventure d asterix', 1);
     const matched = db
       .prepare('SELECT rowid FROM book_fts WHERE book_fts MATCH ?')
-      .all('"dargaud"*') as Array<{ rowid: number }>;
+      .all('"aventure"*') as Array<{ rowid: number }>;
     expect(matched).toHaveLength(1);
     db.close();
   });

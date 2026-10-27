@@ -25,12 +25,26 @@ export interface BookDto {
   isbn13: string | null;
   title: string;
   subtitle: string | null;
+  series?: string | null;
+  volumeNumber?: number | null;
   publisher: string | null;
   coverUrl: string | null;
   authors: BookAuthor[];
   type: BookType;
   collections: BookCollectionRef[];
   createdAt: string;
+}
+
+export interface SeriesSummaryDto {
+  seriesKey: string;
+  name: string;
+  books: BookDto[];
+  ownedVolumes: number[];
+  unnumberedBooksCount: number;
+  maxOwnedVolume: number | null;
+  targetVolumeCount: number | null;
+  effectiveMaxVolume: number;
+  missingVolumes: number[];
 }
 
 export interface DuplicateCheckResult {
@@ -44,6 +58,8 @@ export interface LookupResponse {
   metadata: {
     title: string;
     subtitle: string | null;
+    series?: string | null;
+    volumeNumber?: number | null;
     publisher?: string | null;
     coverUrl?: string | null;
     authors: BookAuthor[];
@@ -55,6 +71,8 @@ export interface CoverCandidate {
   isbn13: string | null;
   title: string;
   subtitle: string | null;
+  series?: string | null;
+  volumeNumber?: number | null;
   publisher: string | null;
   coverUrl: string | null;
   authors: BookAuthor[];
@@ -125,6 +143,30 @@ export interface UpdateUserPayload {
   canEditBooks?: boolean;
   canDeleteBooks?: boolean;
   canManageUsers?: boolean;
+}
+
+export interface BackupStats {
+  booksCount: number;
+  collectionsCount: number;
+  coversCount: number;
+  usersCount: number;
+}
+
+export interface BackupMetadata {
+  filename: string;
+  date: string;
+  createdAt: string;
+  sizeBytes: number;
+  stats: BackupStats;
+}
+
+export interface BackupBundle {
+  format: 'book-collector-backup';
+  version: 1;
+  date: string;
+  createdAt: string;
+  stats: BackupStats;
+  data: Record<string, unknown>;
 }
 
 export const BOOK_TYPE_LABELS: Record<BookType, string> = {
@@ -273,12 +315,14 @@ export const api = {
   getBooks(params?: {
     collectionId?: number;
     type?: string;
+    seriesKey?: string;
     sort?: string;
     q?: string;
   }): Promise<BookDto[]> {
     const search = new URLSearchParams();
     if (params?.collectionId) search.set('collectionId', String(params.collectionId));
     if (params?.type) search.set('type', params.type);
+    if (params?.seriesKey) search.set('seriesKey', params.seriesKey);
     if (params?.sort) search.set('sort', params.sort);
     if (params?.q) search.set('q', params.q);
     const qs = search.toString();
@@ -287,10 +331,40 @@ export const api = {
     );
   },
 
+  getSeries(): Promise<SeriesSummaryDto[]> {
+    return apiFetch('/api/series').then((r) =>
+      handleResponse<SeriesSummaryDto[]>(r),
+    );
+  },
+
+  setSeriesTargetVolumeCount(data: {
+    series?: string;
+    seriesKey?: string;
+    targetVolumeCount: number | null;
+  }): Promise<{
+    seriesKey: string;
+    targetVolumeCount: number | null;
+    series: SeriesSummaryDto | null;
+  }> {
+    return apiFetch('/api/series/target', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).then((r) =>
+      handleResponse<{
+        seriesKey: string;
+        targetVolumeCount: number | null;
+        series: SeriesSummaryDto | null;
+      }>(r),
+    );
+  },
+
   createBook(data: {
     isbn?: string | null;
     title: string;
     subtitle?: string | null;
+    series?: string | null;
+    volumeNumber?: number | null;
     publisher?: string | null;
     coverDataUrl?: string | null;
     coverSourceUrl?: string | null;
@@ -311,6 +385,8 @@ export const api = {
       isbn?: string | null;
       title: string;
       subtitle?: string | null;
+      series?: string | null;
+      volumeNumber?: number | null;
       publisher?: string | null;
       coverDataUrl?: string | null;
       coverSourceUrl?: string | null;
@@ -367,6 +443,8 @@ export const api = {
       type?: BookType;
       publisher?: string | null;
       subtitle?: string | null;
+      series?: string | null;
+      autoExtractVolume?: boolean;
       authors?: BookAuthor[];
       collectionIds?: number[];
     };
@@ -410,6 +488,54 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     }).then((r) => handleResponse<AppSettings>(r));
+  },
+
+  getBackups(): Promise<BackupMetadata[]> {
+    return apiFetch('/api/backups').then((r) =>
+      handleResponse<BackupMetadata[]>(r),
+    );
+  },
+
+  createBackup(): Promise<BackupMetadata> {
+    return apiFetch('/api/backups', {
+      method: 'POST',
+    }).then((r) => handleResponse<BackupMetadata>(r));
+  },
+
+  downloadBackup(filename: string): Promise<string> {
+    return apiFetch(`/api/backups/${encodeURIComponent(filename)}/download`).then(
+      async (r) => {
+        if (!r.ok) {
+          let message = `Erreur HTTP ${r.status}`;
+          try {
+            const body = await r.json();
+            if (body?.error) message = body.error;
+          } catch {
+            // ignore
+          }
+          throw new Error(message);
+        }
+        return r.text();
+      },
+    );
+  },
+
+  restoreBackup(
+    filename: string,
+  ): Promise<{ status: string; stats: BackupStats }> {
+    return apiFetch(`/api/backups/${encodeURIComponent(filename)}/restore`, {
+      method: 'POST',
+    }).then((r) => handleResponse<{ status: string; stats: BackupStats }>(r));
+  },
+
+  restoreUploadedBackup(
+    bundle: unknown,
+  ): Promise<{ status: string; stats: BackupStats }> {
+    return apiFetch('/api/backups/restore-upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bundle),
+    }).then((r) => handleResponse<{ status: string; stats: BackupStats }>(r));
   },
 
   checkDuplicates(params: {

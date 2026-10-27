@@ -503,4 +503,177 @@ describe('Books Catalog & FTS5 Search API (3.1, 3.2, 3.4 - book-catalog)', () =>
     });
     expect(searchGlenat.json()).toHaveLength(2);
   });
+
+  it('manages book series, missing volumes calculation, target volume count, and bulk series assignment with auto volume extraction', async () => {
+    // Reject non-positive volumeNumber
+    const badVolRes = await app.inject({
+      method: 'POST',
+      url: '/api/books',
+      payload: {
+        title: 'One Piece',
+        series: 'One Piece',
+        volumeNumber: 0,
+        authors: [{ name: 'Eiichiro Oda', role: 'author' }],
+        type: 'manga',
+        collectionIds: [salonId],
+      },
+    });
+    expect(badVolRes.statusCode).toBe(400);
+
+    // Create volumes 1, 2, and 5 of One Piece (with mixed case series name)
+    const op1 = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/books',
+        payload: {
+          title: "À l'aube d'une grande aventure",
+          series: 'One Piece',
+          volumeNumber: 1,
+          authors: [{ name: 'Eiichiro Oda', role: 'author' }],
+          type: 'manga',
+          collectionIds: [salonId],
+        },
+      })
+    ).json();
+    expect(op1.series).toBe('One Piece');
+    expect(op1.volumeNumber).toBe(1);
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/books',
+      payload: {
+        title: "L'homme au chapeau de paille",
+        series: 'one piece',
+        volumeNumber: 2,
+        authors: [{ name: 'Eiichiro Oda', role: 'author' }],
+        type: 'manga',
+        collectionIds: [salonId],
+      },
+    });
+
+    await app.inject({
+      method: 'POST',
+      url: '/api/books',
+      payload: {
+        title: 'Pour qui sonne le glas',
+        series: 'ONE PIECE',
+        volumeNumber: 5,
+        authors: [{ name: 'Eiichiro Oda', role: 'author' }],
+        type: 'manga',
+        collectionIds: [salonId],
+      },
+    });
+
+    // FTS search on series name finds all 3 books even though "One Piece" is not in their titles
+    const ftsRes = await app.inject({
+      method: 'GET',
+      url: '/api/books?q=One%20Piece',
+    });
+    expect(ftsRes.statusCode).toBe(200);
+    expect(ftsRes.json()).toHaveLength(3);
+
+    // GET /api/series groups them into a single series and identifies volumes 3 and 4 as missing
+    const seriesRes = await app.inject({
+      method: 'GET',
+      url: '/api/series',
+    });
+    expect(seriesRes.statusCode).toBe(200);
+    const seriesList = seriesRes.json();
+    expect(seriesList).toHaveLength(1);
+    expect(seriesList[0]).toMatchObject({
+      seriesKey: 'one piece',
+      name: 'One Piece',
+      ownedVolumes: [1, 2, 5],
+      maxOwnedVolume: 5,
+      targetVolumeCount: null,
+      effectiveMaxVolume: 5,
+      missingVolumes: [3, 4],
+    });
+
+    // Configure targetVolumeCount = 7 -> missingVolumes becomes [3, 4, 6, 7]
+    const targetRes = await app.inject({
+      method: 'PUT',
+      url: '/api/series/target',
+      payload: {
+        seriesKey: 'one piece',
+        targetVolumeCount: 7,
+      },
+    });
+    expect(targetRes.statusCode).toBe(200);
+    expect(targetRes.json().series).toMatchObject({
+      targetVolumeCount: 7,
+      effectiveMaxVolume: 7,
+      missingVolumes: [3, 4, 6, 7],
+    });
+
+    // Clear targetVolumeCount -> missingVolumes reverts to [3, 4]
+    const clearTargetRes = await app.inject({
+      method: 'PUT',
+      url: '/api/series/target',
+      payload: {
+        seriesKey: 'one piece',
+        targetVolumeCount: null,
+      },
+    });
+    expect(clearTargetRes.statusCode).toBe(200);
+    expect(clearTargetRes.json().series.missingVolumes).toEqual([3, 4]);
+
+    // Bulk series assignment with autoExtractVolume on books that have "Tome X" in title/subtitle
+    const b3 = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/books',
+        payload: {
+          title: 'One Piece - Tome 3',
+          authors: [{ name: 'Eiichiro Oda', role: 'author' }],
+          type: 'manga',
+          collectionIds: [salonId],
+        },
+      })
+    ).json();
+    const b4 = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/books',
+        payload: {
+          title: 'Luffy',
+          subtitle: 'Tome 4',
+          authors: [{ name: 'Eiichiro Oda', role: 'author' }],
+          type: 'manga',
+          collectionIds: [salonId],
+        },
+      })
+    ).json();
+
+    const bulkSeriesRes = await app.inject({
+      method: 'POST',
+      url: '/api/books/bulk-update',
+      payload: {
+        bookIds: [b3.id, b4.id],
+        fields: {
+          series: 'One Piece',
+          autoExtractVolume: true,
+        },
+      },
+    });
+    expect(bulkSeriesRes.statusCode).toBe(200);
+    const updatedBooks = bulkSeriesRes.json().books;
+    expect(updatedBooks[0]).toMatchObject({
+      id: b3.id,
+      series: 'One Piece',
+      volumeNumber: 3,
+    });
+    expect(updatedBooks[1]).toMatchObject({
+      id: b4.id,
+      series: 'One Piece',
+      volumeNumber: 4,
+    });
+
+    // Series is now complete from 1 to 5!
+    const afterSeries = (
+      await app.inject({ method: 'GET', url: '/api/series' })
+    ).json();
+    expect(afterSeries[0].ownedVolumes).toEqual([1, 2, 3, 4, 5]);
+    expect(afterSeries[0].missingVolumes).toEqual([]);
+  });
 });

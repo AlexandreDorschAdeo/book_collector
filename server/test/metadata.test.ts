@@ -37,6 +37,8 @@ describe('Metadata service (4.2 & enriched-isbn-and-covers 2.1, 2.2, 2.3)', () =
     expect(parsed).toEqual({
       title: "La serpe d'or",
       subtitle: "Une aventure d'Astérix - Tome 2",
+      series: "Une aventure d'Astérix",
+      volumeNumber: 2,
       publisher: 'Dargaud',
       coverUrl:
         'https://catalogue.bnf.fr/couverture?appName=NE&idArk=ark%3A%2F12148%2Fcb34374123m&couverture=1',
@@ -63,6 +65,8 @@ describe('Metadata service (4.2 & enriched-isbn-and-covers 2.1, 2.2, 2.3)', () =
       isbn13: '9782012101333',
       title: "La serpe d'or",
       subtitle: "Une aventure d'Astérix - Tome 2",
+      series: "Une aventure d'Astérix",
+      volumeNumber: 2,
       publisher: 'Dargaud',
       coverUrl:
         'https://catalogue.bnf.fr/couverture?appName=NE&idArk=ark%3A%2F12148%2Fcb34374123m&couverture=1',
@@ -167,6 +171,8 @@ describe('Metadata service (4.2 & enriched-isbn-and-covers 2.1, 2.2, 2.3)', () =
       isbn13: '9780306406157',
       title: 'Blacksad',
       subtitle: 'Quelque part entre les ombres',
+      series: null,
+      volumeNumber: null,
       publisher: 'Dargaud',
       coverUrl: 'https://covers.openlibrary.org/b/id/999-L.jpg',
       authors: [

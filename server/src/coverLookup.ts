@@ -12,6 +12,7 @@ import {
 } from './metadata.js';
 import {
   BookAuthor,
+  inferSeriesAndVolume,
   normalizeTitleKey,
   serializeAuthorKey,
 } from './normalize.js';
@@ -34,6 +35,8 @@ export interface CoverCandidate {
   isbn13: string | null;
   title: string;
   subtitle: string | null;
+  series?: string | null;
+  volumeNumber?: number | null;
   publisher: string | null;
   coverUrl: string | null;
   authors: BookAuthor[];
@@ -486,6 +489,8 @@ interface RawCandidate {
   isbn13: string | null;
   title: string;
   subtitle: string | null;
+  series?: string | null;
+  volumeNumber?: number | null;
   publisher: string | null;
   coverUrl: string | null;
   authors: BookAuthor[];
@@ -535,6 +540,8 @@ export async function searchBnfByText(
       isbn13: rec.isbn13,
       title: rec.title,
       subtitle: rec.subtitle,
+      series: rec.series ?? null,
+      volumeNumber: rec.volumeNumber ?? null,
       publisher: rec.publisher,
       coverUrl: rec.coverUrl,
       authors: rec.authors,
@@ -720,6 +727,10 @@ function mergeCandidateList(rawList: RawCandidate[]): RawCandidate[] {
 
     if (!existing.isbn13 && item.isbn13) existing.isbn13 = item.isbn13;
     if (!existing.subtitle && item.subtitle) existing.subtitle = item.subtitle;
+    if (!existing.series && item.series) existing.series = item.series;
+    if (existing.volumeNumber == null && item.volumeNumber != null) {
+      existing.volumeNumber = item.volumeNumber;
+    }
     if (!existing.publisher && item.publisher) existing.publisher = item.publisher;
     if (!existing.coverUrl && item.coverUrl) existing.coverUrl = item.coverUrl;
     const existingHasRoles = existing.authors.some(
@@ -781,6 +792,8 @@ export async function lookupBookFromCoverImage(
         isbn13: exactMeta.isbn13,
         title: exactMeta.title,
         subtitle: exactMeta.subtitle,
+        series: exactMeta.series ?? null,
+        volumeNumber: exactMeta.volumeNumber ?? null,
         publisher: exactMeta.publisher,
         coverUrl: exactMeta.coverUrl,
         authors: exactMeta.authors,
@@ -819,16 +832,26 @@ export async function lookupBookFromCoverImage(
     });
   }
 
-  // Step 3: Enrich every candidate with duplicate check against local SQLite library
-  const candidates: CoverCandidate[] = merged.map((cand) => ({
-    ...cand,
-    duplicates: checkDuplicates(db, {
-      isbn13: cand.isbn13,
-      title: cand.title,
-      subtitle: cand.subtitle,
-      authors: cand.authors,
-    }),
-  }));
+  // Step 3: Enrich every candidate with series/volume inference and duplicate check against local SQLite library
+  const candidates: CoverCandidate[] = merged.map((cand) => {
+    const inferred = inferSeriesAndVolume(
+      cand.title,
+      cand.subtitle,
+      cand.series,
+      cand.volumeNumber,
+    );
+    return {
+      ...cand,
+      series: inferred.series,
+      volumeNumber: inferred.volumeNumber,
+      duplicates: checkDuplicates(db, {
+        isbn13: cand.isbn13,
+        title: cand.title,
+        subtitle: cand.subtitle,
+        authors: cand.authors,
+      }),
+    };
+  });
 
   return {
     clues,

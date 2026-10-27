@@ -3,11 +3,18 @@ import { api, CollectionDto, UserDto } from './api';
 import { CollectionsScreen } from './components/CollectionsScreen';
 import { CatalogScreen } from './components/CatalogScreen';
 import { BulkActionsScreen } from './components/BulkActionsScreen';
+import { SeriesScreen } from './components/SeriesScreen';
 import { ScanScreen } from './components/ScanScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { LoginScreen } from './components/LoginScreen';
 
-type ActiveTab = 'scan' | 'catalog' | 'bulk' | 'collections' | 'settings';
+type ActiveTab =
+  | 'scan'
+  | 'catalog'
+  | 'series'
+  | 'bulk'
+  | 'collections'
+  | 'settings';
 
 export function App() {
   const [authChecking, setAuthChecking] = useState(true);
@@ -121,6 +128,18 @@ export function App() {
             </span>{' '}
             <span className="nav-label">Bibliothèque</span>
           </button>
+          <button
+            type="button"
+            className={`nav-btn ${activeTab === 'series' ? 'active' : ''}`}
+            aria-label="Séries"
+            title="Séries et tomes manquants"
+            onClick={() => setActiveTab('series')}
+          >
+            <span className="nav-icon" aria-hidden="true">
+              🔖
+            </span>{' '}
+            <span className="nav-label">Séries</span>
+          </button>
           {currentUser.canEditBooks && (
             <button
               type="button"
@@ -191,6 +210,9 @@ export function App() {
             canDeleteBooks={currentUser.canDeleteBooks}
           />
         )}
+        {activeTab === 'series' && (
+          <SeriesScreen canEditBooks={currentUser.canEditBooks} />
+        )}
         {activeTab === 'bulk' && currentUser.canEditBooks && (
           <BulkActionsScreen
             collections={collections}
@@ -208,7 +230,10 @@ export function App() {
           />
         )}
         {activeTab === 'settings' && (
-          <SettingsScreen currentUser={currentUser} />
+          <SettingsScreen
+            currentUser={currentUser}
+            onDataRestored={loadCollections}
+          />
         )}
       </main>
     </div>

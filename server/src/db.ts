@@ -36,6 +36,9 @@ export function runMigrations(db: Database.Database): void {
       isbn13 TEXT,
       title TEXT NOT NULL,
       subtitle TEXT,
+      series TEXT,
+      series_key TEXT,
+      volume_number INTEGER,
       publisher TEXT,
       cover_path TEXT,
       authors_json TEXT NOT NULL,
@@ -48,6 +51,13 @@ export function runMigrations(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_book_isbn13 ON book(isbn13);
     CREATE INDEX IF NOT EXISTS idx_book_title_key ON book(title_key);
+
+    CREATE TABLE IF NOT EXISTS series_config (
+      series_key TEXT PRIMARY KEY,
+      series_name TEXT NOT NULL,
+      target_volume_count INTEGER,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
 
     CREATE TABLE IF NOT EXISTS book_collection (
       book_id INTEGER NOT NULL REFERENCES book(id) ON DELETE CASCADE,
@@ -103,6 +113,16 @@ export function runMigrations(db: Database.Database): void {
   if (!colNames.has('cover_path')) {
     db.exec('ALTER TABLE book ADD COLUMN cover_path TEXT;');
   }
+  if (!colNames.has('series')) {
+    db.exec('ALTER TABLE book ADD COLUMN series TEXT;');
+  }
+  if (!colNames.has('series_key')) {
+    db.exec('ALTER TABLE book ADD COLUMN series_key TEXT;');
+  }
+  if (!colNames.has('volume_number')) {
+    db.exec('ALTER TABLE book ADD COLUMN volume_number INTEGER;');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_book_series_key ON book(series_key);');
 
   const ftsRow = db
     .prepare(
@@ -110,7 +130,11 @@ export function runMigrations(db: Database.Database): void {
     )
     .get() as { sql?: string } | undefined;
 
-  if (!ftsRow?.sql || !ftsRow.sql.includes('publisher')) {
+  if (
+    !ftsRow?.sql ||
+    !ftsRow.sql.includes('publisher') ||
+    !ftsRow.sql.includes('series')
+  ) {
     db.exec(`
       DROP TRIGGER IF EXISTS book_ai;
       DROP TRIGGER IF EXISTS book_ad;
@@ -120,6 +144,7 @@ export function runMigrations(db: Database.Database): void {
       CREATE VIRTUAL TABLE book_fts USING fts5(
         title,
         subtitle,
+        series,
         authors_text,
         publisher,
         isbn13,
@@ -129,20 +154,20 @@ export function runMigrations(db: Database.Database): void {
       );
 
       CREATE TRIGGER book_ai AFTER INSERT ON book BEGIN
-        INSERT INTO book_fts(rowid, title, subtitle, authors_text, publisher, isbn13)
-        VALUES (new.id, new.title, COALESCE(new.subtitle, ''), new.authors_text, COALESCE(new.publisher, ''), COALESCE(new.isbn13, ''));
+        INSERT INTO book_fts(rowid, title, subtitle, series, authors_text, publisher, isbn13)
+        VALUES (new.id, new.title, COALESCE(new.subtitle, ''), COALESCE(new.series, ''), new.authors_text, COALESCE(new.publisher, ''), COALESCE(new.isbn13, ''));
       END;
 
       CREATE TRIGGER book_ad AFTER DELETE ON book BEGIN
-        INSERT INTO book_fts(book_fts, rowid, title, subtitle, authors_text, publisher, isbn13)
-        VALUES ('delete', old.id, old.title, COALESCE(old.subtitle, ''), old.authors_text, COALESCE(old.publisher, ''), COALESCE(old.isbn13, ''));
+        INSERT INTO book_fts(book_fts, rowid, title, subtitle, series, authors_text, publisher, isbn13)
+        VALUES ('delete', old.id, old.title, COALESCE(old.subtitle, ''), COALESCE(old.series, ''), old.authors_text, COALESCE(old.publisher, ''), COALESCE(old.isbn13, ''));
       END;
 
       CREATE TRIGGER book_au AFTER UPDATE ON book BEGIN
-        INSERT INTO book_fts(book_fts, rowid, title, subtitle, authors_text, publisher, isbn13)
-        VALUES ('delete', old.id, old.title, COALESCE(old.subtitle, ''), old.authors_text, COALESCE(old.publisher, ''), COALESCE(old.isbn13, ''));
-        INSERT INTO book_fts(rowid, title, subtitle, authors_text, publisher, isbn13)
-        VALUES (new.id, new.title, COALESCE(new.subtitle, ''), new.authors_text, COALESCE(new.publisher, ''), COALESCE(new.isbn13, ''));
+        INSERT INTO book_fts(book_fts, rowid, title, subtitle, series, authors_text, publisher, isbn13)
+        VALUES ('delete', old.id, old.title, COALESCE(old.subtitle, ''), COALESCE(old.series, ''), old.authors_text, COALESCE(old.publisher, ''), COALESCE(old.isbn13, ''));
+        INSERT INTO book_fts(rowid, title, subtitle, series, authors_text, publisher, isbn13)
+        VALUES (new.id, new.title, COALESCE(new.subtitle, ''), COALESCE(new.series, ''), new.authors_text, COALESCE(new.publisher, ''), COALESCE(new.isbn13, ''));
       END;
 
       INSERT INTO book_fts(book_fts) VALUES('rebuild');

@@ -1,11 +1,17 @@
 import Database from 'better-sqlite3';
-import { AuthorRole, BookAuthor } from './normalize.js';
+import {
+  AuthorRole,
+  BookAuthor,
+  inferSeriesAndVolume,
+} from './normalize.js';
 import { isbn13ToIsbn10, normalizeIsbn } from './isbn.js';
 
 export interface IsbnMetadata {
   isbn13: string;
   title: string;
   subtitle: string | null;
+  series?: string | null;
+  volumeNumber?: number | null;
   publisher: string | null;
   coverUrl: string | null;
   authors: BookAuthor[];
@@ -173,10 +179,18 @@ export function parseBnfUnimarcXml(xml: string): PartialMetadata | null {
 
   const subtitle = subtitleParts.length > 0 ? subtitleParts.join(' - ') : null;
   const publisher = publisher214 || publisher210 || null;
+  const inferred = inferSeriesAndVolume(
+    title,
+    subtitle,
+    seriesTitle || null,
+    seriesVol || null,
+  );
 
   return {
     title,
     subtitle,
+    series: inferred.series,
+    volumeNumber: inferred.volumeNumber,
     publisher,
     coverUrl,
     authors,
@@ -503,10 +517,23 @@ export async function lookupIsbnMetadata(
   const coverUrl =
     ol?.coverUrl ?? gb?.coverUrl ?? bnf?.coverUrl ?? sudoc?.coverUrl ?? null;
 
+  const explicitSeries =
+    sources.find((s) => Boolean(s.series))?.series ?? null;
+  const explicitVolume =
+    sources.find((s) => s.volumeNumber != null)?.volumeNumber ?? null;
+  const inferred = inferSeriesAndVolume(
+    title,
+    subtitle,
+    explicitSeries,
+    explicitVolume,
+  );
+
   const result: IsbnMetadata = {
     isbn13,
     title,
     subtitle,
+    series: inferred.series,
+    volumeNumber: inferred.volumeNumber,
     publisher,
     coverUrl,
     authors,

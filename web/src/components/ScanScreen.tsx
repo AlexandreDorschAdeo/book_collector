@@ -24,6 +24,9 @@ export function ScanScreen({ collections, onBookAdded }: ScanScreenProps) {
   const [isbn, setIsbn] = useState('');
   const [title, setTitle] = useState('');
   const [subtitle, setSubtitle] = useState('');
+  const [series, setSeries] = useState('');
+  const [volumeNumber, setVolumeNumber] = useState('');
+  const [knownSeriesNames, setKnownSeriesNames] = useState<string[]>([]);
   const [publisher, setPublisher] = useState('');
   const [coverDataUrl, setCoverDataUrl] = useState<string | null>(null);
   const [coverSourceUrl, setCoverSourceUrl] = useState<string | null>(null);
@@ -48,10 +51,19 @@ export function ScanScreen({ collections, onBookAdded }: ScanScreenProps) {
     }
   }, [collections, targetCollectionId]);
 
+  useEffect(() => {
+    api
+      .getSeries()
+      .then((list) => setKnownSeriesNames(list.map((s) => s.name)))
+      .catch(() => {});
+  }, []);
+
   const resetBookFieldsKeepCollection = () => {
     setIsbn('');
     setTitle('');
     setSubtitle('');
+    setSeries('');
+    setVolumeNumber('');
     setPublisher('');
     setCoverDataUrl(null);
     setCoverSourceUrl(null);
@@ -68,6 +80,12 @@ export function ScanScreen({ collections, onBookAdded }: ScanScreenProps) {
     setConfirmDuplicateCopy(false);
     setTitle(cand.title);
     setSubtitle(cand.subtitle ?? '');
+    setSeries(cand.series ?? '');
+    setVolumeNumber(
+      cand.volumeNumber !== null && cand.volumeNumber !== undefined
+        ? String(cand.volumeNumber)
+        : '',
+    );
     setPublisher(cand.publisher ?? '');
     if (cand.isbn13) {
       setIsbn(cand.isbn13);
@@ -126,6 +144,13 @@ export function ScanScreen({ collections, onBookAdded }: ScanScreenProps) {
       if (res.found && res.metadata) {
         setTitle(res.metadata.title);
         setSubtitle(res.metadata.subtitle ?? '');
+        setSeries(res.metadata.series ?? '');
+        setVolumeNumber(
+          res.metadata.volumeNumber !== null &&
+            res.metadata.volumeNumber !== undefined
+            ? String(res.metadata.volumeNumber)
+            : '',
+        );
         setPublisher(res.metadata.publisher ?? '');
         setCoverDataUrl(null);
         setCoverSourceUrl(res.metadata.coverUrl ?? null);
@@ -138,6 +163,8 @@ export function ScanScreen({ collections, onBookAdded }: ScanScreenProps) {
       } else {
         setTitle('');
         setSubtitle('');
+        setSeries('');
+        setVolumeNumber('');
         setPublisher('');
         setCoverDataUrl(null);
         setCoverSourceUrl(null);
@@ -222,6 +249,8 @@ export function ScanScreen({ collections, onBookAdded }: ScanScreenProps) {
         isbn: isbn.trim() || null,
         title: title.trim(),
         subtitle: subtitle.trim() || null,
+        series: series.trim() || null,
+        volumeNumber: volumeNumber.trim() ? Number(volumeNumber.trim()) : null,
         publisher: publisher.trim() || null,
         coverDataUrl: coverDataUrl || null,
         coverSourceUrl: coverDataUrl ? null : (coverSourceUrl || null),
@@ -363,6 +392,37 @@ export function ScanScreen({ collections, onBookAdded }: ScanScreenProps) {
                 onChange={(e) => setSubtitle(e.target.value)}
                 onBlur={handleManualDuplicateCheck}
               />
+            </div>
+
+            <div className="field-row-2">
+              <div className="field">
+                <label htmlFor="scan-series">Série</label>
+                <input
+                  id="scan-series"
+                  list="scan-series-datalist"
+                  value={series}
+                  onChange={(e) => setSeries(e.target.value)}
+                  placeholder="Ex : One Piece, Astérix…"
+                />
+                <datalist id="scan-series-datalist">
+                  {knownSeriesNames.map((name) => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              </div>
+
+              <div className="field">
+                <label htmlFor="scan-volume">N° de tome</label>
+                <input
+                  id="scan-volume"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={volumeNumber}
+                  onChange={(e) => setVolumeNumber(e.target.value)}
+                  placeholder="Ex : 12"
+                />
+              </div>
             </div>
 
             <div className="field-row-2">

@@ -39,6 +39,9 @@ export function CatalogScreen({
   const [editingBook, setEditingBook] = useState<BookDto | null>(null);
   const [formTitle, setFormTitle] = useState('');
   const [formSubtitle, setFormSubtitle] = useState('');
+  const [formSeries, setFormSeries] = useState('');
+  const [formVolumeNumber, setFormVolumeNumber] = useState('');
+  const [knownSeriesNames, setKnownSeriesNames] = useState<string[]>([]);
   const [formPublisher, setFormPublisher] = useState('');
   const [formIsbn, setFormIsbn] = useState('');
   const [formType, setFormType] = useState<BookType>('book');
@@ -114,10 +117,23 @@ export function CatalogScreen({
     loadBooks();
   }, [selectedCollectionId, typeFilter, sortBy, searchQuery]);
 
+  useEffect(() => {
+    api
+      .getSeries()
+      .then((list) => setKnownSeriesNames(list.map((s) => s.name)))
+      .catch(() => {});
+  }, [books]);
+
   const openEditForm = (book: BookDto) => {
     setEditingBook(book);
     setFormTitle(book.title);
     setFormSubtitle(book.subtitle ?? '');
+    setFormSeries(book.series ?? '');
+    setFormVolumeNumber(
+      book.volumeNumber !== null && book.volumeNumber !== undefined
+        ? String(book.volumeNumber)
+        : '',
+    );
     setFormPublisher(book.publisher ?? '');
     setFormIsbn(book.isbn13 ?? '');
     setFormType(book.type);
@@ -166,6 +182,10 @@ export function CatalogScreen({
         isbn: formIsbn.trim() || null,
         title: formTitle.trim(),
         subtitle: formSubtitle.trim() || null,
+        series: formSeries.trim() || null,
+        volumeNumber: formVolumeNumber.trim()
+          ? Number(formVolumeNumber.trim())
+          : null,
         publisher: formPublisher.trim() || null,
         coverDataUrl: formCoverDataUrl || undefined,
         removeCover: formRemoveCover || undefined,
@@ -287,6 +307,7 @@ export function CatalogScreen({
             onChange={(e) => setSortBy(e.target.value)}
           >
             <option value="title">Titre</option>
+            <option value="series">Série &amp; Tome</option>
             <option value="author">Auteur</option>
             <option value="date">Date d&apos;ajout</option>
           </select>
@@ -369,6 +390,35 @@ export function CatalogScreen({
                       value={formSubtitle}
                       onChange={(e) => setFormSubtitle(e.target.value)}
                     />
+                  </div>
+                  <div className="field-row-2">
+                    <div className="field">
+                      <label htmlFor="book-series">Série</label>
+                      <input
+                        id="book-series"
+                        list="book-series-datalist"
+                        value={formSeries}
+                        onChange={(e) => setFormSeries(e.target.value)}
+                        placeholder="Ex : One Piece, Astérix…"
+                      />
+                      <datalist id="book-series-datalist">
+                        {knownSeriesNames.map((name) => (
+                          <option key={name} value={name} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <div className="field">
+                      <label htmlFor="book-volume">N° de tome</label>
+                      <input
+                        id="book-volume"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={formVolumeNumber}
+                        onChange={(e) => setFormVolumeNumber(e.target.value)}
+                        placeholder="Ex : 12"
+                      />
+                    </div>
                   </div>
                   <div className="field-row-2">
                     <div className="field">
@@ -599,9 +649,19 @@ export function CatalogScreen({
                 <div className="book-main">
                   <div className="book-title-row">
                     <h3>{book.title}</h3>
-                    <span className="badge badge-type">
-                      {BOOK_TYPE_LABELS[book.type]}
-                    </span>
+                    <div className="book-badges-inline">
+                      {book.series && (
+                        <span className="badge badge-series">
+                          📚 {book.series}
+                          {book.volumeNumber != null
+                            ? ` — Tome ${book.volumeNumber}`
+                            : ''}
+                        </span>
+                      )}
+                      <span className="badge badge-type">
+                        {BOOK_TYPE_LABELS[book.type]}
+                      </span>
+                    </div>
                   </div>
                   {book.subtitle && (
                     <p className="book-subtitle">{book.subtitle}</p>

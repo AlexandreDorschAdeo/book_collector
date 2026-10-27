@@ -1011,4 +1011,305 @@ describe('App shell', () => {
       await screen.findByText(/2 livre\(s\) modifié\(s\) avec succès/i),
     ).toBeInTheDocument();
   });
+
+  it('manages backups in Settings: list, create now, download, restore server backup, and import external backup file', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'getMe').mockResolvedValue({
+      id: 1,
+      username: 'admin',
+      canAddBooks: true,
+      canEditBooks: true,
+      canDeleteBooks: true,
+      canManageUsers: true,
+      createdAt: '2026-10-26T00:00:00Z',
+    });
+    vi.spyOn(api, 'getCollections').mockResolvedValue(sampleCollections);
+    vi.spyOn(api, 'getBooks').mockResolvedValue([]);
+    vi.spyOn(api, 'getUsers').mockResolvedValue([]);
+    vi.spyOn(api, 'getSettings').mockResolvedValue({
+      visionProvider: 'auto',
+      geminiApiKey: '',
+      geminiModel: 'gemini-2.0-flash',
+      openaiApiKey: '',
+      openaiModel: 'gpt-4o-mini',
+      ollamaUrl: '',
+      ollamaModel: 'llava',
+      googleBooksApiKey: '',
+    });
+
+    const sampleBackupMeta = {
+      filename: 'backup-2026-10-27.json',
+      date: '2026-10-27',
+      createdAt: '2026-10-27T10:00:00Z',
+      sizeBytes: 4096,
+      stats: {
+        booksCount: 12,
+        collectionsCount: 2,
+        coversCount: 5,
+        usersCount: 1,
+      },
+    };
+    vi.spyOn(api, 'getBackups').mockResolvedValue([sampleBackupMeta]);
+    const createBackupSpy = vi
+      .spyOn(api, 'createBackup')
+      .mockResolvedValue(sampleBackupMeta);
+    const downloadBackupSpy = vi
+      .spyOn(api, 'downloadBackup')
+      .mockResolvedValue('{"format":"book-collector-backup","version":1}');
+    const restoreBackupSpy = vi.spyOn(api, 'restoreBackup').mockResolvedValue({
+      status: 'ok',
+      stats: sampleBackupMeta.stats,
+    });
+    const restoreUploadSpy = vi
+      .spyOn(api, 'restoreUploadedBackup')
+      .mockResolvedValue({
+        status: 'ok',
+        stats: {
+          booksCount: 8,
+          collectionsCount: 3,
+          coversCount: 2,
+          usersCount: 1,
+        },
+      });
+
+    render(<App />);
+
+    await user.click(
+      await screen.findByRole('button', { name: /Paramétrage/i }),
+    );
+
+    expect(
+      await screen.findByRole('heading', {
+        name: /Sauvegardes et restauration/i,
+      }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(/backup-2026-10-27\.json/i),
+    ).toBeInTheDocument();
+
+    // Create manual backup
+    await user.click(
+      screen.getByRole('button', {
+        name: /Créer une sauvegarde maintenant/i,
+      }),
+    );
+    expect(createBackupSpy).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByText(
+        /Sauvegarde « backup-2026-10-27\.json » créée avec succès/i,
+      ),
+    ).toBeInTheDocument();
+
+    // Download backup
+    await user.click(
+      screen.getByRole('button', {
+        name: /Télécharger backup-2026-10-27\.json/i,
+      }),
+    );
+    expect(downloadBackupSpy).toHaveBeenCalledWith('backup-2026-10-27.json');
+    expect(
+      await screen.findByText(
+        /Téléchargement de « backup-2026-10-27\.json » lancé/i,
+      ),
+    ).toBeInTheDocument();
+
+    // Restore server backup with confirmation
+    await user.click(
+      screen.getByRole('button', {
+        name: /Restaurer backup-2026-10-27\.json/i,
+      }),
+    );
+    expect(
+      screen.getByRole('dialog', { name: /Confirmer la restauration/i }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: /Confirmer la restauration/i }),
+    );
+    expect(restoreBackupSpy).toHaveBeenCalledWith('backup-2026-10-27.json');
+    expect(
+      await screen.findByText(
+        /Sauvegarde « backup-2026-10-27\.json » restaurée avec succès/i,
+      ),
+    ).toBeInTheDocument();
+
+    // Upload external backup file and confirm restore
+    const uploadedBundle = {
+      format: 'book-collector-backup',
+      version: 1,
+      date: '2026-10-20',
+      createdAt: '2026-10-20T08:00:00Z',
+      stats: {
+        booksCount: 8,
+        collectionsCount: 3,
+        coversCount: 2,
+        usersCount: 1,
+      },
+      data: {
+        collections: [],
+        books: [],
+        bookCollections: [],
+        metadataCache: [],
+        appSettings: [],
+        appUsers: [],
+        covers: [],
+      },
+    };
+    const backupFile = new File(
+      [JSON.stringify(uploadedBundle)],
+      'external-backup.json',
+      { type: 'application/json' },
+    );
+    // Ensure File.prototype.text works in jsdom if missing
+    if (typeof backupFile.text !== 'function') {
+      Object.defineProperty(backupFile, 'text', {
+        value: async () => JSON.stringify(uploadedBundle),
+      });
+    }
+
+    const uploadInput = screen.getByLabelText(
+      /Importer un fichier de sauvegarde/i,
+    );
+    await user.upload(uploadInput, backupFile);
+
+    expect(
+      await screen.findByRole('dialog', { name: /Confirmer la restauration/i }),
+    ).toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: /Confirmer la restauration/i }),
+    );
+
+    expect(restoreUploadSpy).toHaveBeenCalledWith(uploadedBundle);
+    expect(
+      await screen.findByText(
+        /Sauvegarde « external-backup\.json » restaurée avec succès/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('displays series with missing volumes in the Séries tab, updates targetVolumeCount, copies missing summary, and supports bulk series assignment', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'getMe').mockResolvedValue({
+      id: 1,
+      username: 'admin',
+      canAddBooks: true,
+      canEditBooks: true,
+      canDeleteBooks: true,
+      canManageUsers: true,
+      createdAt: '2026-10-26T00:00:00Z',
+    });
+    vi.spyOn(api, 'getCollections').mockResolvedValue(sampleCollections);
+    const sampleBooks = [
+      {
+        id: 10,
+        isbn13: '9782723433358',
+        title: 'One Piece',
+        subtitle: 'Tome 1',
+        series: 'One Piece',
+        volumeNumber: 1,
+        publisher: 'Glénat',
+        coverUrl: null,
+        authors: [{ name: 'Eiichiro Oda', role: 'author' as const }],
+        type: 'manga' as const,
+        collections: [{ id: 2, name: 'Mangas', location: 'Maison de campagne' }],
+        createdAt: '2026-10-26T00:00:00Z',
+      },
+      {
+        id: 11,
+        isbn13: '9782723434805',
+        title: 'One Piece',
+        subtitle: 'Tome 3',
+        series: 'One Piece',
+        volumeNumber: 3,
+        publisher: 'Glénat',
+        coverUrl: null,
+        authors: [{ name: 'Eiichiro Oda', role: 'author' as const }],
+        type: 'manga' as const,
+        collections: [{ id: 2, name: 'Mangas', location: 'Maison de campagne' }],
+        createdAt: '2026-10-26T00:00:00Z',
+      },
+    ];
+    vi.spyOn(api, 'getBooks').mockResolvedValue(sampleBooks);
+
+    const sampleSeries = {
+      name: 'One Piece',
+      seriesKey: 'one piece',
+      books: sampleBooks,
+      ownedVolumes: [1, 3],
+      unnumberedBooksCount: 0,
+      maxOwnedVolume: 3,
+      targetVolumeCount: 3,
+      effectiveMaxVolume: 3,
+      missingVolumes: [2],
+    };
+    const getSeriesSpy = vi
+      .spyOn(api, 'getSeries')
+      .mockResolvedValue([sampleSeries]);
+    const setSeriesTargetSpy = vi
+      .spyOn(api, 'setSeriesTargetVolumeCount')
+      .mockResolvedValue({
+        seriesKey: 'one piece',
+        targetVolumeCount: 5,
+        series: {
+          ...sampleSeries,
+          targetVolumeCount: 5,
+          effectiveMaxVolume: 5,
+          missingVolumes: [2, 4, 5],
+        },
+      });
+
+    render(<App />);
+
+    // Verify series badge in Catalog
+    expect(
+      await screen.findByText(/📚 One Piece — Tome 1/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/📚 One Piece — Tome 3/i)).toBeInTheDocument();
+
+    // Open Séries tab
+    await user.click(screen.getByRole('button', { name: /^Séries$/i }));
+
+    expect(
+      await screen.findByRole('heading', {
+        name: /Séries & Tomes manquants/i,
+      }),
+    ).toBeInTheDocument();
+    expect(getSeriesSpy).toHaveBeenCalled();
+
+    // Verify missing volume chip (T.2 ✗) and owned chips (T.1 ✓, T.3 ✓)
+    expect(screen.getByText(/1 tome\(s\) manquant\(s\)/i)).toBeInTheDocument();
+    expect(screen.getByText('T.2 ✗')).toBeInTheDocument();
+    expect(screen.getByText('T.1 ✓')).toBeInTheDocument();
+    expect(screen.getByText('T.3 ✓')).toBeInTheDocument();
+
+    // Copy missing volumes summary
+    await user.click(
+      screen.getByRole('button', { name: /Copier les manquants/i }),
+    );
+    expect(
+      await screen.findByText(/One Piece : Tome 2/i),
+    ).toBeInTheDocument();
+
+    // Update target volume count ("Dernier tome paru")
+    const targetInput = screen.getByLabelText(/Dernier tome paru :/i);
+    await user.clear(targetInput);
+    await user.type(targetInput, '5');
+    await user.click(
+      screen.getByRole('button', {
+        name: /^Enregistrer$/i,
+      }),
+    );
+
+    expect(setSeriesTargetSpy).toHaveBeenCalledWith({
+      series: 'One Piece',
+      seriesKey: 'one piece',
+      targetVolumeCount: 5,
+    });
+    expect(
+      await screen.findByText(
+        /Dernier tome paru défini à 5 pour « One Piece »/i,
+      ),
+    ).toBeInTheDocument();
+  });
 });
+
+

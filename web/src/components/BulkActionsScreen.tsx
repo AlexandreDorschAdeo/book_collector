@@ -40,6 +40,10 @@ export function BulkActionsScreen({
   const [bulkPublisher, setBulkPublisher] = useState('');
   const [applySubtitle, setApplySubtitle] = useState(false);
   const [bulkSubtitle, setBulkSubtitle] = useState('');
+  const [applySeries, setApplySeries] = useState(false);
+  const [bulkSeries, setBulkSeries] = useState('');
+  const [bulkAutoExtractVolume, setBulkAutoExtractVolume] = useState(true);
+  const [knownSeriesNames, setKnownSeriesNames] = useState<string[]>([]);
   const [applyAuthors, setApplyAuthors] = useState(false);
   const [bulkAuthors, setBulkAuthors] = useState<BookAuthor[]>([
     { name: '', role: 'author' },
@@ -70,6 +74,13 @@ export function BulkActionsScreen({
   useEffect(() => {
     loadBooks();
   }, [collectionFilter, typeFilter, searchQuery]);
+
+  useEffect(() => {
+    api
+      .getSeries()
+      .then((list) => setKnownSeriesNames(list.map((s) => s.name)))
+      .catch(() => {});
+  }, [books]);
 
   useEffect(() => {
     if (showMoveModal) {
@@ -163,6 +174,9 @@ export function BulkActionsScreen({
     setBulkPublisher('');
     setApplySubtitle(false);
     setBulkSubtitle('');
+    setApplySeries(false);
+    setBulkSeries('');
+    setBulkAutoExtractVolume(true);
     setApplyAuthors(false);
     setBulkAuthors([{ name: '', role: 'author' }]);
     setApplyCollections(false);
@@ -185,6 +199,7 @@ export function BulkActionsScreen({
       !applyType &&
       !applyPublisher &&
       !applySubtitle &&
+      !applySeries &&
       !applyAuthors &&
       !applyCollections
     ) {
@@ -201,6 +216,10 @@ export function BulkActionsScreen({
     }
     if (applySubtitle) {
       fields.subtitle = bulkSubtitle.trim() || null;
+    }
+    if (applySeries) {
+      fields.series = bulkSeries.trim() || null;
+      fields.autoExtractVolume = bulkAutoExtractVolume;
     }
     if (applyAuthors) {
       const validAuthors = bulkAuthors
@@ -522,10 +541,53 @@ export function BulkActionsScreen({
                 <label className="checkbox-label">
                   <input
                     type="checkbox"
+                    checked={applySeries}
+                    onChange={(e) => setApplySeries(e.target.checked)}
+                  />
+                  <strong>Appliquer la série</strong>
+                </label>
+                {applySeries && (
+                  <>
+                    <div className="field">
+                      <label htmlFor="bulk-edit-series">
+                        Série à appliquer (laisser vide pour dissocier de la série)
+                      </label>
+                      <input
+                        id="bulk-edit-series"
+                        list="bulk-series-datalist"
+                        value={bulkSeries}
+                        onChange={(e) => setBulkSeries(e.target.value)}
+                        placeholder="Ex : One Piece, Astérix…"
+                      />
+                      <datalist id="bulk-series-datalist">
+                        {knownSeriesNames.map((name) => (
+                          <option key={name} value={name} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={bulkAutoExtractVolume}
+                        onChange={(e) =>
+                          setBulkAutoExtractVolume(e.target.checked)
+                        }
+                      />
+                      Extraire automatiquement le N° de tome depuis le titre ou
+                      le sous-titre (ex : « Tome 12 », « T. 3 »)
+                    </label>
+                  </>
+                )}
+              </div>
+
+              <div className="bulk-field-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
                     checked={applySubtitle}
                     onChange={(e) => setApplySubtitle(e.target.checked)}
                   />
-                  <strong>Appliquer le sous-titre / série</strong>
+                  <strong>Appliquer le sous-titre</strong>
                 </label>
                 {applySubtitle && (
                   <div className="field">
@@ -670,9 +732,19 @@ export function BulkActionsScreen({
                   <div className="book-main">
                     <div className="book-title-row">
                       <h3>{book.title}</h3>
-                      <span className="badge badge-type">
-                        {BOOK_TYPE_LABELS[book.type]}
-                      </span>
+                      <div className="book-badges-inline">
+                        {book.series && (
+                          <span className="badge badge-series">
+                            📚 {book.series}
+                            {book.volumeNumber != null
+                              ? ` — Tome ${book.volumeNumber}`
+                              : ''}
+                          </span>
+                        )}
+                        <span className="badge badge-type">
+                          {BOOK_TYPE_LABELS[book.type]}
+                        </span>
+                      </div>
                     </div>
                     {book.subtitle && (
                       <p className="book-subtitle">{book.subtitle}</p>

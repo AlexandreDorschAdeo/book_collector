@@ -4,6 +4,8 @@ import {
   AuthorRole,
   BookAuthor,
   hasCommonAuthor,
+  inferSeriesAndVolume,
+  normalizeSeriesKey,
   normalizeTitleKey,
   serializeAuthorKey,
   stripAccents,
@@ -29,12 +31,26 @@ export interface BookDto {
   isbn13: string | null;
   title: string;
   subtitle: string | null;
+  series: string | null;
+  volumeNumber: number | null;
   publisher: string | null;
   coverUrl: string | null;
   authors: BookAuthor[];
   type: BookType;
   collections: BookCollectionRef[];
   createdAt: string;
+}
+
+export interface SeriesSummaryDto {
+  seriesKey: string;
+  name: string;
+  books: BookDto[];
+  ownedVolumes: number[];
+  unnumberedBooksCount: number;
+  maxOwnedVolume: number | null;
+  targetVolumeCount: number | null;
+  effectiveMaxVolume: number;
+  missingVolumes: number[];
 }
 
 const VALID_TYPES = new Set<BookType>(['book', 'bd', 'manga', 'comic']);
@@ -74,7 +90,7 @@ export function listCollections(db: Database.Database): CollectionDto[] {
 export function getBookById(db: Database.Database, id: number): BookDto | null {
   const row = db
     .prepare(
-      `SELECT id, isbn13, title, subtitle, publisher, cover_path, authors_json, type, created_at
+      `SELECT id, isbn13, title, subtitle, series, volume_number, publisher, cover_path, authors_json, type, created_at
        FROM book WHERE id = ?`,
     )
     .get(id) as RawBookRow | undefined;
@@ -88,6 +104,9 @@ interface RawBookRow {
   isbn13: string | null;
   title: string;
   subtitle: string | null;
+  series?: string | null;
+  series_key?: string | null;
+  volume_number?: number | null;
   publisher?: string | null;
   cover_path?: string | null;
   authors_json: string;
@@ -127,6 +146,11 @@ export function hydrateBooks(db: Database.Database, rows: RawBookRow[]): BookDto
     isbn13: r.isbn13,
     title: r.title,
     subtitle: r.subtitle ?? null,
+    series: r.series ?? null,
+    volumeNumber:
+      typeof r.volume_number === 'number' && Number.isInteger(r.volume_number)
+        ? r.volume_number
+        : null,
     publisher: r.publisher ?? null,
     coverUrl: r.cover_path ? `/api/covers/${r.cover_path}` : null,
     authors: JSON.parse(r.authors_json) as BookAuthor[],
@@ -140,6 +164,8 @@ export interface BookInput {
   isbn?: string | null;
   title?: string;
   subtitle?: string | null;
+  series?: string | null;
+  volumeNumber?: number | string | null;
   publisher?: string | null;
   authors?: Array<{ name?: string; role?: string } | string>;
   type?: string;
@@ -158,6 +184,9 @@ export function validateBookInput(
     isbn13: string | null;
     title: string;
     subtitle: string | null;
+    series: string | null;
+    seriesKey: string | null;
+    volumeNumber: number | null;
     publisher: string | null;
     authors: BookAuthor[];
     authorsText: string;
@@ -174,6 +203,28 @@ export function validateBookInput(
 
   const subtitleRaw = (input.subtitle ?? '').trim();
   const subtitle = subtitleRaw ? subtitleRaw : null;
+
+  const seriesRaw = (input.series ?? '').trim();
+  const seriesKeyCandidate = seriesRaw ? normalizeSeriesKey(seriesRaw) : '';
+  const series = seriesRaw && seriesKeyCandidate ? seriesRaw : null;
+  const seriesKey = series ? seriesKeyCandidate : null;
+
+  let volumeNumber: number | null = null;
+  if (
+    input.volumeNumber !== undefined &&
+    input.volumeNumber !== null &&
+    String(input.volumeNumber).trim() !== ''
+  ) {
+    const parsedVol = Number(String(input.volumeNumber).trim());
+    if (!Number.isInteger(parsedVol) || parsedVol < 1) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'Le numéro de tome doit être un entier positif (≥ 1).',
+      };
+    }
+    volumeNumber = parsedVol;
+  }
 
   const publisherRaw = (input.publisher ?? '').trim();
   const publisher = publisherRaw ? publisherRaw : null;
@@ -247,6 +298,9 @@ export function validateBookInput(
       isbn13,
       title,
       subtitle,
+      series,
+      seriesKey,
+      volumeNumber,
       publisher,
       authors,
       authorsText,
@@ -263,11 +317,12 @@ export function searchAndListBooks(
   params: {
     collectionId?: number;
     type?: string;
+    seriesKey?: string;
     sort?: string;
     q?: string;
   },
 ): BookDto[] {
-  const { collectionId, type, sort = 'title', q } = params;
+  const { collectionId, type, seriesKey, sort = 'title', q } = params;
   const conditions: string[] = [];
   const args: unknown[] = [];
 
@@ -281,6 +336,14 @@ export function searchAndListBooks(
   if (type && VALID_TYPES.has(type as BookType)) {
     conditions.push('b.type = ?');
     args.push(type);
+  }
+
+  if (seriesKey) {
+    const normalizedKey = normalizeSeriesKey(seriesKey);
+    if (normalizedKey) {
+      conditions.push('b.series_key = ?');
+      args.push(normalizedKey);
+    }
   }
 
   const queryText = (q ?? '').trim();
@@ -302,16 +365,20 @@ export function searchAndListBooks(
   }
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
-  let orderClause = 'ORDER BY b.title COLLATE NOCASE ASC, b.id ASC';
+  let orderClause =
+    'ORDER BY b.title COLLATE NOCASE ASC, COALESCE(b.volume_number, 999999) ASC, b.id ASC';
   if (sort === 'author') {
     orderClause = 'ORDER BY b.authors_text COLLATE NOCASE ASC, b.title COLLATE NOCASE ASC';
   } else if (sort === 'date' || sort === 'created_at') {
     orderClause = 'ORDER BY b.created_at DESC, b.id DESC';
+  } else if (sort === 'series') {
+    orderClause =
+      'ORDER BY CASE WHEN b.series IS NULL THEN 1 ELSE 0 END ASC, b.series COLLATE NOCASE ASC, COALESCE(b.volume_number, 999999) ASC, b.title COLLATE NOCASE ASC, b.id ASC';
   }
 
   const rows = db
     .prepare(
-      `SELECT b.id, b.isbn13, b.title, b.subtitle, b.publisher, b.cover_path, b.authors_json, b.type, b.created_at
+      `SELECT b.id, b.isbn13, b.title, b.subtitle, b.series, b.volume_number, b.publisher, b.cover_path, b.authors_json, b.type, b.created_at
        FROM book b
        ${whereClause}
        ${orderClause}`,
@@ -336,7 +403,7 @@ export function checkDuplicates(
   if (isbn13) {
     const rows = db
       .prepare(
-        `SELECT id, isbn13, title, subtitle, publisher, cover_path, authors_json, type, created_at
+        `SELECT id, isbn13, title, subtitle, series, volume_number, publisher, cover_path, authors_json, type, created_at
          FROM book WHERE isbn13 = ? ORDER BY id ASC`,
       )
       .all(isbn13) as RawBookRow[];
@@ -348,7 +415,7 @@ export function checkDuplicates(
   if (titleKey && authors.length > 0) {
     const candidates = db
       .prepare(
-        `SELECT id, isbn13, title, subtitle, publisher, cover_path, authors_json, type, created_at, author_key
+        `SELECT id, isbn13, title, subtitle, series, volume_number, publisher, cover_path, authors_json, type, created_at, author_key
          FROM book WHERE title_key = ? ORDER BY id ASC`,
       )
       .all(titleKey) as RawBookRow[];
@@ -365,3 +432,174 @@ export function checkDuplicates(
 
   return { sameIsbn, otherEditions };
 }
+
+export function listSeriesSummaries(db: Database.Database): SeriesSummaryDto[] {
+  const rows = db
+    .prepare(
+      `SELECT id, isbn13, title, subtitle, series, series_key, volume_number, publisher, cover_path, authors_json, type, created_at
+       FROM book
+       WHERE series_key IS NOT NULL AND series_key != ''
+       ORDER BY series_key ASC, COALESCE(volume_number, 999999) ASC, title COLLATE NOCASE ASC, id ASC`,
+    )
+    .all() as RawBookRow[];
+
+  if (rows.length === 0) return [];
+
+  const hydrated = hydrateBooks(db, rows);
+  const bookById = new Map<number, BookDto>();
+  for (const b of hydrated) {
+    bookById.set(b.id, b);
+  }
+
+  const configRows = db
+    .prepare(
+      'SELECT series_key, series_name, target_volume_count FROM series_config',
+    )
+    .all() as Array<{
+    series_key: string;
+    series_name: string;
+    target_volume_count: number | null;
+  }>;
+  const configMap = new Map<
+    string,
+    { seriesName: string; targetVolumeCount: number | null }
+  >();
+  for (const cfg of configRows) {
+    configMap.set(cfg.series_key, {
+      seriesName: cfg.series_name,
+      targetVolumeCount:
+        typeof cfg.target_volume_count === 'number' &&
+        Number.isInteger(cfg.target_volume_count) &&
+        cfg.target_volume_count >= 1
+          ? cfg.target_volume_count
+          : null,
+    });
+  }
+
+  const groups = new Map<
+    string,
+    { displayName: string; books: BookDto[] }
+  >();
+  for (const row of rows) {
+    const sKey = row.series_key!;
+    const dto = bookById.get(row.id)!;
+    const existing = groups.get(sKey);
+    if (!existing) {
+      const cfgName = configMap.get(sKey)?.seriesName;
+      groups.set(sKey, {
+        displayName: cfgName || row.series || sKey,
+        books: [dto],
+      });
+    } else {
+      existing.books.push(dto);
+    }
+  }
+
+  const summaries: SeriesSummaryDto[] = [];
+  for (const [seriesKey, group] of groups.entries()) {
+    const ownedSet = new Set<number>();
+    let unnumberedBooksCount = 0;
+    for (const b of group.books) {
+      if (
+        typeof b.volumeNumber === 'number' &&
+        Number.isInteger(b.volumeNumber) &&
+        b.volumeNumber >= 1
+      ) {
+        ownedSet.add(b.volumeNumber);
+      } else {
+        unnumberedBooksCount += 1;
+      }
+    }
+
+    const ownedVolumes = Array.from(ownedSet).sort((a, b) => a - b);
+    const maxOwnedVolume =
+      ownedVolumes.length > 0 ? ownedVolumes[ownedVolumes.length - 1] : null;
+    const targetVolumeCount = configMap.get(seriesKey)?.targetVolumeCount ?? null;
+    const effectiveMaxVolume = Math.max(
+      maxOwnedVolume ?? 0,
+      targetVolumeCount ?? 0,
+    );
+
+    const missingVolumes: number[] = [];
+    for (let v = 1; v <= effectiveMaxVolume; v++) {
+      if (!ownedSet.has(v)) {
+        missingVolumes.push(v);
+      }
+    }
+
+    summaries.push({
+      seriesKey,
+      name: group.displayName,
+      books: group.books,
+      ownedVolumes,
+      unnumberedBooksCount,
+      maxOwnedVolume,
+      targetVolumeCount,
+      effectiveMaxVolume,
+      missingVolumes,
+    });
+  }
+
+  summaries.sort((a, b) =>
+    a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }),
+  );
+  return summaries;
+}
+
+export function setSeriesTargetVolumeCount(
+  db: Database.Database,
+  seriesNameOrKey: string,
+  targetVolumeCount: number | null,
+): { ok: true; seriesKey: string; targetVolumeCount: number | null } | { ok: false; status: number; error: string } {
+  const raw = (seriesNameOrKey ?? '').trim();
+  const seriesKey = normalizeSeriesKey(raw);
+  if (!seriesKey) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Nom ou identifiant de série manquant.',
+    };
+  }
+
+  if (targetVolumeCount !== null && targetVolumeCount !== undefined) {
+    if (!Number.isInteger(targetVolumeCount) || targetVolumeCount < 1) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'Le dernier tome paru doit être un entier positif (≥ 1).',
+      };
+    }
+  }
+
+  const existingBookSeries = db
+    .prepare(
+      'SELECT series FROM book WHERE series_key = ? AND series IS NOT NULL LIMIT 1',
+    )
+    .get(seriesKey) as { series: string } | undefined;
+  const displayName = existingBookSeries?.series ?? raw;
+
+  if (targetVolumeCount === null || targetVolumeCount === undefined) {
+    db.prepare('DELETE FROM series_config WHERE series_key = ?').run(seriesKey);
+    return { ok: true, seriesKey, targetVolumeCount: null };
+  }
+
+  db.prepare(
+    `INSERT INTO series_config (series_key, series_name, target_volume_count, updated_at)
+     VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(series_key) DO UPDATE SET
+       series_name = excluded.series_name,
+       target_volume_count = excluded.target_volume_count,
+       updated_at = datetime('now')`,
+  ).run(seriesKey, displayName, targetVolumeCount);
+
+  return { ok: true, seriesKey, targetVolumeCount };
+}
+
+export function extractVolumeForBook(
+  title: string,
+  subtitle: string | null,
+): number | null {
+  const inferred = inferSeriesAndVolume(title, subtitle);
+  return inferred.volumeNumber;
+}
+

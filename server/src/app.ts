@@ -35,19 +35,30 @@ import {
   saveCoverFromRemoteUrl,
 } from './covers.js';
 import {
+  isValidBackupFilename,
+  listBackups,
+  restoreBackupBundle,
+  writeDailyBackup,
+} from './backup.js';
+import {
   BookInput,
   checkDuplicates,
+  extractVolumeForBook,
   getBookById,
   listCollections,
+  listSeriesSummaries,
   normalizeCollectionKey,
   searchAndListBooks,
+  setSeriesTargetVolumeCount,
   validateBookInput,
 } from './repository.js';
-import { BookAuthor } from './normalize.js';
+import { BookAuthor, inferSeriesAndVolume } from './normalize.js';
 
 export interface AppOptions {
   dbPath?: string;
   coversDir?: string;
+  backupsDir?: string;
+  nowFn?: () => Date;
   staticDir?: string;
   enforceAuth?: boolean;
   fetchImpl?: FetchLike;
@@ -55,6 +66,8 @@ export interface AppOptions {
   lookupFn?: (isbn13: string) => Promise<{
     title: string;
     subtitle: string | null;
+    series?: string | null;
+    volumeNumber?: number | null;
     publisher?: string | null;
     coverUrl?: string | null;
     authors: Array<{ name: string; role: 'author' | 'writer' | 'illustrator' }>;
@@ -83,7 +96,22 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     (dbPath !== ':memory:'
       ? path.join(path.dirname(dbPath), 'covers')
       : path.join(os.tmpdir(), 'book-collector-covers-test'));
+  const backupsDir =
+    options.backupsDir ??
+    process.env.BACKUPS_DIR ??
+    (dbPath !== ':memory:'
+      ? path.join(path.dirname(dbPath), 'backups')
+      : path.join(os.tmpdir(), `book-collector-backups-test-${process.pid}`));
+  const nowFn = options.nowFn ?? (() => new Date());
   const db = openDatabase(dbPath);
+
+  const triggerDailyBackup = () => {
+    try {
+      writeDailyBackup(db, coversDir, backupsDir, nowFn());
+    } catch {
+      // Ignore disk errors so book operations still succeed
+    }
+  };
 
   app.addHook('onClose', async () => {
     db.close();
@@ -127,7 +155,11 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     const method = req.method.toUpperCase();
 
     // User & system management routes -> require canManageUsers
-    if (rawUrl.startsWith('/api/users') || rawUrl.startsWith('/api/settings')) {
+    if (
+      rawUrl.startsWith('/api/users') ||
+      rawUrl.startsWith('/api/settings') ||
+      rawUrl.startsWith('/api/backups')
+    ) {
       if (!user.canManageUsers) {
         return reply.code(403).send({
           error:
@@ -163,12 +195,13 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       return;
     }
 
-    // Editing books / moving between collections / editing collections -> require canEditBooks
+    // Editing books / moving between collections / editing collections / series target -> require canEditBooks
     if (
       (method === 'PUT' && /^\/api\/books\/\d+$/.test(rawUrl)) ||
       (method === 'POST' && /^\/api\/books\/\d+\/move$/.test(rawUrl)) ||
       (method === 'POST' && rawUrl === '/api/books/bulk-move') ||
       (method === 'POST' && rawUrl === '/api/books/bulk-update') ||
+      (method === 'PUT' && rawUrl === '/api/series/target') ||
       (method === 'DELETE' &&
         /^\/api\/books\/\d+\/collections\/\d+$/.test(rawUrl)) ||
       (method === 'PUT' && /^\/api\/collections\/\d+$/.test(rawUrl))
@@ -310,6 +343,83 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     return updateAppSettings(db, req.body ?? {});
   });
 
+  // --- Backups & Restore (requires canManageUsers) ---
+  app.get('/api/backups', async () => {
+    return listBackups(backupsDir);
+  });
+
+  app.post('/api/backups', async (_req, reply) => {
+    const created = writeDailyBackup(db, coversDir, backupsDir, nowFn());
+    return reply.code(201).send(created);
+  });
+
+  app.get<{ Params: { filename: string } }>(
+    '/api/backups/:filename/download',
+    async (req, reply) => {
+      const rawName = req.params.filename ?? '';
+      if (!isValidBackupFilename(rawName)) {
+        return reply
+          .code(400)
+          .send({ error: 'Nom de fichier de sauvegarde invalide.' });
+      }
+      const fullPath = path.join(backupsDir, rawName);
+      if (!fs.existsSync(fullPath)) {
+        return reply.code(404).send({ error: 'Sauvegarde introuvable.' });
+      }
+      const content = fs.readFileSync(fullPath, 'utf-8');
+      return reply
+        .header('Content-Type', 'application/json; charset=utf-8')
+        .header('Content-Disposition', `attachment; filename="${rawName}"`)
+        .send(content);
+    },
+  );
+
+  app.post<{ Params: { filename: string } }>(
+    '/api/backups/:filename/restore',
+    async (req, reply) => {
+      const rawName = req.params.filename ?? '';
+      if (!isValidBackupFilename(rawName)) {
+        return reply
+          .code(400)
+          .send({ error: 'Nom de fichier de sauvegarde invalide.' });
+      }
+      const fullPath = path.join(backupsDir, rawName);
+      if (!fs.existsSync(fullPath)) {
+        return reply.code(404).send({ error: 'Sauvegarde introuvable.' });
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(fs.readFileSync(fullPath, 'utf-8'));
+      } catch {
+        return reply
+          .code(400)
+          .send({ error: 'Fichier de sauvegarde illisible ou corrompu.' });
+      }
+      const res = restoreBackupBundle(db, coversDir, parsed);
+      if (!res.ok) {
+        return reply.code(400).send({ error: res.error });
+      }
+      return reply.send({ status: 'ok', stats: res.stats });
+    },
+  );
+
+  app.post<{ Body: unknown }>(
+    '/api/backups/restore-upload',
+    { bodyLimit: 50 * 1024 * 1024 },
+    async (req, reply) => {
+      const body = req.body as Record<string, unknown> | null | undefined;
+      const candidate =
+        body && typeof body === 'object' && 'bundle' in body
+          ? body.bundle
+          : body;
+      const res = restoreBackupBundle(db, coversDir, candidate);
+      if (!res.ok) {
+        return reply.code(400).send({ error: res.error });
+      }
+      return reply.send({ status: 'ok', stats: res.stats });
+    },
+  );
+
   // --- Collections CRUD ---
   app.get('/api/collections', async () => {
     return listCollections(db);
@@ -446,6 +556,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     Querystring: {
       collectionId?: string;
       type?: string;
+      seriesKey?: string;
       sort?: string;
       q?: string;
     };
@@ -456,8 +567,56 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     return searchAndListBooks(db, {
       collectionId,
       type: req.query.type,
+      seriesKey: req.query.seriesKey,
       sort: req.query.sort,
       q: req.query.q,
+    });
+  });
+
+  // --- Series & Missing Volumes ---
+  app.get('/api/series', async () => {
+    return listSeriesSummaries(db);
+  });
+
+  app.put<{
+    Body: {
+      series?: string;
+      seriesKey?: string;
+      targetVolumeCount?: number | string | null;
+    };
+  }>('/api/series/target', async (req, reply) => {
+    const seriesNameOrKey = (
+      req.body?.series ??
+      req.body?.seriesKey ??
+      ''
+    ).trim();
+    const rawTarget = req.body?.targetVolumeCount;
+    let targetVolumeCount: number | null = null;
+    if (
+      rawTarget !== undefined &&
+      rawTarget !== null &&
+      String(rawTarget).trim() !== ''
+    ) {
+      targetVolumeCount = Number(String(rawTarget).trim());
+    }
+
+    const res = setSeriesTargetVolumeCount(
+      db,
+      seriesNameOrKey,
+      targetVolumeCount,
+    );
+    if (!res.ok) {
+      return reply.code(res.status).send({ error: res.error });
+    }
+
+    triggerDailyBackup();
+    const summaries = listSeriesSummaries(db);
+    const updated =
+      summaries.find((s) => s.seriesKey === res.seriesKey) ?? null;
+    return reply.send({
+      seriesKey: res.seriesKey,
+      targetVolumeCount: res.targetVolumeCount,
+      series: updated,
     });
   });
 
@@ -515,13 +674,16 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     const tx = db.transaction(() => {
       const info = db
         .prepare(
-          `INSERT INTO book (isbn13, title, subtitle, publisher, authors_json, authors_text, type, title_key, author_key)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO book (isbn13, title, subtitle, series, series_key, volume_number, publisher, authors_json, authors_text, type, title_key, author_key)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           data.isbn13,
           data.title,
           data.subtitle,
+          data.series,
+          data.seriesKey,
+          data.volumeNumber,
           data.publisher,
           JSON.stringify(data.authors),
           data.authorsText,
@@ -570,6 +732,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       );
     }
 
+    triggerDailyBackup();
     return reply.code(201).send(getBookById(db, bookId));
   });
 
@@ -592,6 +755,12 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
           req.body?.subtitle !== undefined
             ? req.body.subtitle
             : existing.subtitle,
+        series:
+          req.body?.series !== undefined ? req.body.series : existing.series,
+        volumeNumber:
+          req.body?.volumeNumber !== undefined
+            ? req.body.volumeNumber
+            : existing.volumeNumber,
         publisher:
           req.body?.publisher !== undefined
             ? req.body.publisher
@@ -648,13 +817,17 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       const tx = db.transaction(() => {
         db.prepare(
           `UPDATE book
-           SET isbn13 = ?, title = ?, subtitle = ?, publisher = ?, cover_path = ?,
-               authors_json = ?, authors_text = ?, type = ?, title_key = ?, author_key = ?
+           SET isbn13 = ?, title = ?, subtitle = ?, series = ?, series_key = ?, volume_number = ?,
+               publisher = ?, cover_path = ?, authors_json = ?, authors_text = ?,
+               type = ?, title_key = ?, author_key = ?
            WHERE id = ?`,
         ).run(
           data.isbn13,
           data.title,
           data.subtitle,
+          data.series,
+          data.seriesKey,
+          data.volumeNumber,
           data.publisher,
           nextCoverPath,
           JSON.stringify(data.authors),
@@ -675,6 +848,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       });
 
       tx();
+      triggerDailyBackup();
       return reply.send(getBookById(db, id));
     },
   );
@@ -700,6 +874,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
         'INSERT OR IGNORE INTO book_collection (book_id, collection_id) VALUES (?, ?)',
       ).run(bookId, collectionId);
 
+      triggerDailyBackup();
       return reply.send(getBookById(db, bookId));
     },
   );
@@ -747,6 +922,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       if (res.error) {
         return reply.code(res.status).send({ error: res.error });
       }
+      triggerDailyBackup();
       return reply.send(getBookById(db, bookId));
     },
   );
@@ -783,6 +959,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     });
 
     tx();
+    triggerDailyBackup();
     return reply.send(getBookById(db, bookId));
   });
 
@@ -846,6 +1023,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     });
 
     tx();
+    triggerDailyBackup();
     const updatedBooks = bookIds
       .map((id) => getBookById(db, id))
       .filter((b): b is NonNullable<typeof b> => b !== null);
@@ -863,6 +1041,8 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
         type?: string;
         publisher?: string | null;
         subtitle?: string | null;
+        series?: string | null;
+        autoExtractVolume?: boolean;
         authors?: Array<{ name?: string; role?: string } | string>;
         collectionIds?: number[];
       };
@@ -889,6 +1069,8 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       (fields.type === undefined &&
         fields.publisher === undefined &&
         fields.subtitle === undefined &&
+        fields.series === undefined &&
+        !fields.autoExtractVolume &&
         fields.authors === undefined &&
         fields.collectionIds === undefined)
     ) {
@@ -911,11 +1093,26 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
         });
       }
 
+      const nextSubtitle =
+        fields.subtitle !== undefined ? fields.subtitle : existing.subtitle;
+      const nextSeries =
+        fields.series !== undefined ? fields.series : existing.series;
+      let nextVolumeNumber = existing.volumeNumber;
+      if (fields.series !== undefined && (fields.series === null || String(fields.series).trim() === '')) {
+        nextVolumeNumber = null;
+      } else if (fields.autoExtractVolume) {
+        const extracted = extractVolumeForBook(existing.title, nextSubtitle ?? null);
+        if (extracted !== null) {
+          nextVolumeNumber = extracted;
+        }
+      }
+
       const mergedInput: BookInput = {
         isbn: existing.isbn13,
         title: existing.title,
-        subtitle:
-          fields.subtitle !== undefined ? fields.subtitle : existing.subtitle,
+        subtitle: nextSubtitle,
+        series: nextSeries,
+        volumeNumber: nextVolumeNumber,
         publisher:
           fields.publisher !== undefined
             ? fields.publisher
@@ -944,7 +1141,8 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     const tx = db.transaction(() => {
       const updateBookStmt = db.prepare(
         `UPDATE book
-         SET subtitle = ?, publisher = ?, authors_json = ?, authors_text = ?,
+         SET subtitle = ?, series = ?, series_key = ?, volume_number = ?,
+             publisher = ?, authors_json = ?, authors_text = ?,
              type = ?, title_key = ?, author_key = ?
          WHERE id = ?`,
       );
@@ -958,6 +1156,9 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
       for (const item of preparedUpdates) {
         updateBookStmt.run(
           item.data.subtitle,
+          item.data.series,
+          item.data.seriesKey,
+          item.data.volumeNumber,
           item.data.publisher,
           JSON.stringify(item.data.authors),
           item.data.authorsText,
@@ -976,6 +1177,7 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     });
 
     tx();
+    triggerDailyBackup();
     const updatedBooks = bookIds
       .map((id) => getBookById(db, id))
       .filter((b): b is NonNullable<typeof b> => b !== null);
@@ -1046,6 +1248,15 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
         authors: meta?.authors ?? [],
       });
 
+      const inferred = meta
+        ? inferSeriesAndVolume(
+            meta.title,
+            meta.subtitle,
+            meta.series,
+            meta.volumeNumber,
+          )
+        : null;
+
       return reply.send({
         isbn13,
         found: Boolean(meta),
@@ -1053,6 +1264,17 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
           ? {
               title: meta.title,
               subtitle: meta.subtitle,
+              ...(inferred?.series
+                ? { series: inferred.series }
+                : meta.series !== undefined
+                  ? { series: meta.series }
+                  : {}),
+              ...(inferred?.volumeNumber !== null &&
+              inferred?.volumeNumber !== undefined
+                ? { volumeNumber: inferred.volumeNumber }
+                : meta.volumeNumber !== undefined
+                  ? { volumeNumber: meta.volumeNumber }
+                  : {}),
               publisher: meta.publisher ?? null,
               coverUrl: meta.coverUrl ?? null,
               authors: meta.authors,

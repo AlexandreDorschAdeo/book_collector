@@ -1,11 +1,27 @@
 import React, { useEffect, useState } from 'react';
-import { api, AppSettings, UserDto, VisionProviderMode } from '../api';
+import {
+  api,
+  AppSettings,
+  BackupMetadata,
+  UserDto,
+  VisionProviderMode,
+} from '../api';
 
 export interface SettingsScreenProps {
   currentUser?: UserDto;
+  onDataRestored?: () => void;
 }
 
-export function SettingsScreen({ currentUser }: SettingsScreenProps) {
+function formatBackupSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} o`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} Ko`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} Mo`;
+}
+
+export function SettingsScreen({
+  currentUser,
+  onDataRestored,
+}: SettingsScreenProps) {
   const canManageUsers = currentUser ? currentUser.canManageUsers : true;
 
   // Vision AI & system settings state
@@ -39,6 +55,16 @@ export function SettingsScreen({ currentUser }: SettingsScreenProps) {
     {},
   );
 
+  // Backups & restore state
+  const [backups, setBackups] = useState<BackupMetadata[]>([]);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+  const [restoringBackup, setRestoringBackup] = useState(false);
+  const [pendingRestore, setPendingRestore] = useState<
+    | { type: 'server'; filename: string }
+    | { type: 'upload'; filename: string; bundle: unknown }
+    | null
+  >(null);
+
   const loadUsers = async () => {
     if (!canManageUsers) return;
     try {
@@ -49,24 +75,38 @@ export function SettingsScreen({ currentUser }: SettingsScreenProps) {
     }
   };
 
+  const loadBackups = async () => {
+    if (!canManageUsers) return;
+    try {
+      const list = await api.getBackups();
+      setBackups(list);
+    } catch {
+      // ignore in offline/test if not mocked
+    }
+  };
+
+  const loadSettingsData = async () => {
+    if (!canManageUsers) return;
+    try {
+      const s = await api.getSettings();
+      setVisionProvider(s.visionProvider);
+      setGeminiApiKey(s.geminiApiKey);
+      setGeminiModel(s.geminiModel || 'gemini-2.0-flash');
+      setOpenaiApiKey(s.openaiApiKey);
+      setOpenaiModel(s.openaiModel || 'gpt-4o-mini');
+      setOllamaUrl(s.ollamaUrl);
+      setOllamaModel(s.ollamaModel || 'llava');
+      setGoogleBooksApiKey(s.googleBooksApiKey);
+    } catch {
+      // ignore in offline/test if not mocked
+    }
+  };
+
   useEffect(() => {
     if (canManageUsers) {
-      api
-        .getSettings()
-        .then((s: AppSettings) => {
-          setVisionProvider(s.visionProvider);
-          setGeminiApiKey(s.geminiApiKey);
-          setGeminiModel(s.geminiModel || 'gemini-2.0-flash');
-          setOpenaiApiKey(s.openaiApiKey);
-          setOpenaiModel(s.openaiModel || 'gpt-4o-mini');
-          setOllamaUrl(s.ollamaUrl);
-          setOllamaModel(s.ollamaModel || 'llava');
-          setGoogleBooksApiKey(s.googleBooksApiKey);
-        })
-        .catch(() => {
-          // ignore in offline/test if not mocked
-        });
+      loadSettingsData();
       loadUsers();
+      loadBackups();
     }
   }, [canManageUsers]);
 
@@ -216,6 +256,116 @@ export function SettingsScreen({ currentUser }: SettingsScreenProps) {
     }
   };
 
+  const handleCreateBackup = async () => {
+    setError(null);
+    setStatusMessage(null);
+    setCreatingBackup(true);
+    try {
+      const created = await api.createBackup();
+      setStatusMessage(
+        `Sauvegarde « ${created.filename} » créée avec succès (${created.stats.booksCount} livre(s)).`,
+      );
+      await loadBackups();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Erreur lors de la création de la sauvegarde.',
+      );
+    } finally {
+      setCreatingBackup(false);
+    }
+  };
+
+  const handleDownloadBackup = async (filename: string) => {
+    setError(null);
+    setStatusMessage(null);
+    try {
+      const content = await api.downloadBackup(filename);
+      const blob = new Blob([content], { type: 'application/json' });
+      const hasUrlApi =
+        typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function';
+      const objectUrl = hasUrlApi ? URL.createObjectURL(blob) : '';
+      if (objectUrl) {
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        if (typeof URL.revokeObjectURL === 'function') {
+          URL.revokeObjectURL(objectUrl);
+        }
+      }
+      setStatusMessage(`Téléchargement de « ${filename} » lancé.`);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Erreur lors du téléchargement de la sauvegarde.',
+      );
+    }
+  };
+
+  const handleUploadBackupFile = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setError(null);
+    setStatusMessage(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      if (
+        !parsed ||
+        typeof parsed !== 'object' ||
+        parsed.format !== 'book-collector-backup'
+      ) {
+        setError(
+          'Fichier de sauvegarde invalide : format book-collector-backup attendu.',
+        );
+        return;
+      }
+      setPendingRestore({
+        type: 'upload',
+        filename: file.name,
+        bundle: parsed,
+      });
+    } catch {
+      setError('Impossible de lire ce fichier de sauvegarde JSON.');
+    }
+  };
+
+  const handleConfirmRestore = async () => {
+    if (!pendingRestore) return;
+    setError(null);
+    setStatusMessage(null);
+    setRestoringBackup(true);
+    try {
+      const res =
+        pendingRestore.type === 'server'
+          ? await api.restoreBackup(pendingRestore.filename)
+          : await api.restoreUploadedBackup(pendingRestore.bundle);
+      const restoredName = pendingRestore.filename;
+      setPendingRestore(null);
+      setStatusMessage(
+        `Sauvegarde « ${restoredName} » restaurée avec succès (${res.stats.booksCount} livre(s), ${res.stats.collectionsCount} collection(s)).`,
+      );
+      await Promise.all([loadBackups(), loadUsers(), loadSettingsData()]);
+      onDataRestored?.();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Erreur lors de la restauration de la sauvegarde.',
+      );
+    } finally {
+      setRestoringBackup(false);
+    }
+  };
+
   return (
     <section className="screen-section">
       <h2>⚙️ Paramétrage</h2>
@@ -229,6 +379,125 @@ export function SettingsScreen({ currentUser }: SettingsScreenProps) {
       {statusMessage && (
         <div role="status" className="alert alert-success">
           {statusMessage}
+        </div>
+      )}
+
+      {canManageUsers && (
+        <div className="card book-form">
+          <h3>💾 Sauvegardes et restauration</h3>
+          <p className="field-hint">
+            Une sauvegarde complète (livres, couvertures, collections,
+            utilisateurs et paramètres) est générée automatiquement chaque jour
+            où au moins un livre est ajouté ou modifié. Les 7 derniers jours de
+            sauvegarde sont conservés automatiquement.
+          </p>
+
+          <div className="card-actions backup-actions-bar">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              disabled={creatingBackup}
+              onClick={handleCreateBackup}
+            >
+              {creatingBackup
+                ? 'Sauvegarde en cours…'
+                : 'Créer une sauvegarde maintenant'}
+            </button>
+
+            <label className="btn btn-secondary btn-sm file-btn">
+              📥 Importer un fichier de sauvegarde
+              <input
+                type="file"
+                accept=".json,application/json"
+                aria-label="Importer un fichier de sauvegarde"
+                onChange={handleUploadBackupFile}
+                style={{ display: 'none' }}
+              />
+            </label>
+          </div>
+
+          {pendingRestore && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Confirmer la restauration"
+              className="backup-confirm-box"
+            >
+              <p>
+                <strong>
+                  ⚠️ Restaurer « {pendingRestore.filename} » ?
+                </strong>{' '}
+                Cette opération remplacera l&apos;intégralité des livres,
+                collections, images de couvertures, utilisateurs et paramètres
+                actuels.
+              </p>
+              <div className="card-actions">
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  disabled={restoringBackup}
+                  onClick={handleConfirmRestore}
+                >
+                  {restoringBackup
+                    ? 'Restauration…'
+                    : 'Confirmer la restauration'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  disabled={restoringBackup}
+                  onClick={() => setPendingRestore(null)}
+                >
+                  Annuler
+                </button>
+              </div>
+            </div>
+          )}
+
+          {backups.length === 0 ? (
+            <p className="empty-state">
+              Aucune sauvegarde disponible sur le serveur.
+            </p>
+          ) : (
+            <div className="backups-list">
+              {backups.map((b) => (
+                <div key={b.filename} className="backup-item-card">
+                  <div className="backup-item-info">
+                    <strong>📦 {b.filename}</strong>
+                    <span className="backup-item-meta">
+                      📅 {b.date} • {b.stats.booksCount} livre(s) •{' '}
+                      {b.stats.collectionsCount} collection(s) •{' '}
+                      {b.stats.coversCount} couverture(s) •{' '}
+                      {formatBackupSize(b.sizeBytes)}
+                    </span>
+                  </div>
+                  <div className="card-actions">
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      aria-label={`Télécharger ${b.filename}`}
+                      onClick={() => handleDownloadBackup(b.filename)}
+                    >
+                      ⬇️ Télécharger
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      aria-label={`Restaurer ${b.filename}`}
+                      onClick={() =>
+                        setPendingRestore({
+                          type: 'server',
+                          filename: b.filename,
+                        })
+                      }
+                    >
+                      🔄 Restaurer
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
