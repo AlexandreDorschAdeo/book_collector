@@ -1,0 +1,10 @@
+{
+  local_certs
+}
+
+https:// {
+  tls internal {
+    on_demand
+  }
+  reverse_proxy app:3000
+}

@@ -1,0 +1,18 @@
+{
+  "name": "Ma Bibliothèque",
+  "short_name": "Bibliothèque",
+  "description": "Gestion de bibliothèque de livres physiques avec scan ISBN et détection de doublons",
+  "lang": "fr",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1e293b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

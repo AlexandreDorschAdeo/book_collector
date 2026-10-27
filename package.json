@@ -1,0 +1,9 @@
+{
+  "name": "book-collector",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "npm --prefix server run build && npm --prefix web run build",
+    "test": "npm --prefix server test && npm --prefix web test"
+  }
+}
