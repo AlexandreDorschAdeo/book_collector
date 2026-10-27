@@ -167,6 +167,8 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
     if (
       (method === 'PUT' && /^\/api\/books\/\d+$/.test(rawUrl)) ||
       (method === 'POST' && /^\/api\/books\/\d+\/move$/.test(rawUrl)) ||
+      (method === 'POST' && rawUrl === '/api/books/bulk-move') ||
+      (method === 'POST' && rawUrl === '/api/books/bulk-update') ||
       (method === 'DELETE' &&
         /^\/api\/books\/\d+\/collections\/\d+$/.test(rawUrl)) ||
       (method === 'PUT' && /^\/api\/collections\/\d+$/.test(rawUrl))
@@ -782,6 +784,205 @@ export function buildApp(options: AppOptions = {}): FastifyInstance {
 
     tx();
     return reply.send(getBookById(db, bookId));
+  });
+
+  // Bulk move multiple books to a target collection (and optionally remove from a source collection)
+  app.post<{
+    Body: {
+      bookIds?: number[];
+      fromCollectionId?: number | null;
+      toCollectionId?: number;
+    };
+  }>('/api/books/bulk-move', async (req, reply) => {
+    const rawIds = Array.isArray(req.body?.bookIds) ? req.body.bookIds : [];
+    const bookIds = Array.from(
+      new Set(
+        rawIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    );
+    if (bookIds.length === 0) {
+      return reply
+        .code(400)
+        .send({ error: 'Veuillez sélectionner au moins un livre.' });
+    }
+
+    const toCollectionId = Number(req.body?.toCollectionId);
+    const targetCol = db
+      .prepare('SELECT id FROM collection WHERE id = ?')
+      .get(toCollectionId);
+    if (!targetCol) {
+      return reply.code(400).send({ error: 'Collection cible introuvable.' });
+    }
+
+    const fromCollectionId = req.body?.fromCollectionId
+      ? Number(req.body.fromCollectionId)
+      : 0;
+
+    const placeholders = bookIds.map(() => '?').join(',');
+    const existingRows = db
+      .prepare(`SELECT id FROM book WHERE id IN (${placeholders})`)
+      .all(...bookIds) as Array<{ id: number }>;
+    if (existingRows.length !== bookIds.length) {
+      return reply.code(404).send({
+        error: 'Un ou plusieurs livres sélectionnés sont introuvables.',
+      });
+    }
+
+    const tx = db.transaction(() => {
+      const insertStmt = db.prepare(
+        'INSERT OR IGNORE INTO book_collection (book_id, collection_id) VALUES (?, ?)',
+      );
+      const deleteStmt = db.prepare(
+        'DELETE FROM book_collection WHERE book_id = ? AND collection_id = ?',
+      );
+      for (const bookId of bookIds) {
+        insertStmt.run(bookId, toCollectionId);
+        if (fromCollectionId && fromCollectionId !== toCollectionId) {
+          deleteStmt.run(bookId, fromCollectionId);
+        }
+      }
+    });
+
+    tx();
+    const updatedBooks = bookIds
+      .map((id) => getBookById(db, id))
+      .filter((b): b is NonNullable<typeof b> => b !== null);
+    return reply.send({
+      updatedCount: updatedBooks.length,
+      books: updatedBooks,
+    });
+  });
+
+  // Bulk update selected fields on multiple books in a single transaction
+  app.post<{
+    Body: {
+      bookIds?: number[];
+      fields?: {
+        type?: string;
+        publisher?: string | null;
+        subtitle?: string | null;
+        authors?: Array<{ name?: string; role?: string } | string>;
+        collectionIds?: number[];
+      };
+    };
+  }>('/api/books/bulk-update', async (req, reply) => {
+    const rawIds = Array.isArray(req.body?.bookIds) ? req.body.bookIds : [];
+    const bookIds = Array.from(
+      new Set(
+        rawIds
+          .map((id) => Number(id))
+          .filter((id) => Number.isInteger(id) && id > 0),
+      ),
+    );
+    if (bookIds.length === 0) {
+      return reply
+        .code(400)
+        .send({ error: 'Veuillez sélectionner au moins un livre.' });
+    }
+
+    const fields = req.body?.fields;
+    if (
+      !fields ||
+      typeof fields !== 'object' ||
+      (fields.type === undefined &&
+        fields.publisher === undefined &&
+        fields.subtitle === undefined &&
+        fields.authors === undefined &&
+        fields.collectionIds === undefined)
+    ) {
+      return reply.code(400).send({
+        error: 'Veuillez sélectionner au moins un champ à modifier.',
+      });
+    }
+
+    const preparedUpdates: Array<{
+      id: number;
+      data: Extract<ReturnType<typeof validateBookInput>, { ok: true }>['data'];
+      updateCollections: boolean;
+    }> = [];
+
+    for (const bookId of bookIds) {
+      const existing = getBookById(db, bookId);
+      if (!existing) {
+        return reply.code(404).send({
+          error: 'Un ou plusieurs livres sélectionnés sont introuvables.',
+        });
+      }
+
+      const mergedInput: BookInput = {
+        isbn: existing.isbn13,
+        title: existing.title,
+        subtitle:
+          fields.subtitle !== undefined ? fields.subtitle : existing.subtitle,
+        publisher:
+          fields.publisher !== undefined
+            ? fields.publisher
+            : existing.publisher,
+        authors:
+          fields.authors !== undefined ? fields.authors : existing.authors,
+        type: fields.type !== undefined ? fields.type : existing.type,
+        collectionIds:
+          fields.collectionIds !== undefined
+            ? fields.collectionIds
+            : existing.collections.map((c) => c.id),
+      };
+
+      const validated = validateBookInput(db, mergedInput);
+      if (!validated.ok) {
+        return reply.code(validated.status).send({ error: validated.error });
+      }
+
+      preparedUpdates.push({
+        id: bookId,
+        data: validated.data,
+        updateCollections: fields.collectionIds !== undefined,
+      });
+    }
+
+    const tx = db.transaction(() => {
+      const updateBookStmt = db.prepare(
+        `UPDATE book
+         SET subtitle = ?, publisher = ?, authors_json = ?, authors_text = ?,
+             type = ?, title_key = ?, author_key = ?
+         WHERE id = ?`,
+      );
+      const deleteColsStmt = db.prepare(
+        'DELETE FROM book_collection WHERE book_id = ?',
+      );
+      const insertColStmt = db.prepare(
+        'INSERT INTO book_collection (book_id, collection_id) VALUES (?, ?)',
+      );
+
+      for (const item of preparedUpdates) {
+        updateBookStmt.run(
+          item.data.subtitle,
+          item.data.publisher,
+          JSON.stringify(item.data.authors),
+          item.data.authorsText,
+          item.data.type,
+          item.data.titleKey,
+          item.data.authorKey,
+          item.id,
+        );
+        if (item.updateCollections) {
+          deleteColsStmt.run(item.id);
+          for (const cid of item.data.collectionIds) {
+            insertColStmt.run(item.id, cid);
+          }
+        }
+      }
+    });
+
+    tx();
+    const updatedBooks = bookIds
+      .map((id) => getBookById(db, id))
+      .filter((b): b is NonNullable<typeof b> => b !== null);
+    return reply.send({
+      updatedCount: updatedBooks.length,
+      books: updatedBooks,
+    });
   });
 
   app.delete<{ Params: { id: string } }>(

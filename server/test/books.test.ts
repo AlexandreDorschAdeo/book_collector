@@ -368,4 +368,139 @@ describe('Books Catalog & FTS5 Search API (3.1, 3.2, 3.4 - book-catalog)', () =>
 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
+
+  it('moves multiple books in bulk in a single transaction via POST /api/books/bulk-move', async () => {
+    const b1 = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/books',
+        payload: {
+          title: 'Naruto Tome 1',
+          authors: [{ name: 'Masashi Kishimoto', role: 'author' }],
+          type: 'manga',
+          collectionIds: [salonId],
+        },
+      })
+    ).json();
+    const b2 = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/books',
+        payload: {
+          title: 'Naruto Tome 2',
+          authors: [{ name: 'Masashi Kishimoto', role: 'author' }],
+          type: 'manga',
+          collectionIds: [salonId],
+        },
+      })
+    ).json();
+
+    const emptyRes = await app.inject({
+      method: 'POST',
+      url: '/api/books/bulk-move',
+      payload: { bookIds: [], toCollectionId: campagneId },
+    });
+    expect(emptyRes.statusCode).toBe(400);
+
+    const moveRes = await app.inject({
+      method: 'POST',
+      url: '/api/books/bulk-move',
+      payload: {
+        bookIds: [b1.id, b2.id],
+        fromCollectionId: salonId,
+        toCollectionId: campagneId,
+      },
+    });
+    expect(moveRes.statusCode).toBe(200);
+    const body = moveRes.json();
+    expect(body.updatedCount).toBe(2);
+    expect(
+      body.books.every((b: { collections: Array<{ id: number }> }) =>
+        b.collections.map((c) => c.id).join(',') === String(campagneId),
+      ),
+    ).toBe(true);
+  });
+
+  it('updates selected fields across multiple books in bulk via POST /api/books/bulk-update and updates FTS index', async () => {
+    const b1 = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/books',
+        payload: {
+          title: 'Dragon Ball Tome 1',
+          subtitle: 'Ancienne édition',
+          publisher: 'Ancien Éditeur',
+          authors: [{ name: 'Auteur Inconnu', role: 'author' }],
+          type: 'book',
+          collectionIds: [salonId],
+        },
+      })
+    ).json();
+    const b2 = (
+      await app.inject({
+        method: 'POST',
+        url: '/api/books',
+        payload: {
+          title: 'Dragon Ball Tome 2',
+          subtitle: 'Tome 2',
+          publisher: 'Autre Éditeur',
+          authors: [{ name: 'Auteur Inconnu', role: 'author' }],
+          type: 'book',
+          collectionIds: [salonId],
+        },
+      })
+    ).json();
+
+    const noFieldsRes = await app.inject({
+      method: 'POST',
+      url: '/api/books/bulk-update',
+      payload: { bookIds: [b1.id, b2.id], fields: {} },
+    });
+    expect(noFieldsRes.statusCode).toBe(400);
+
+    const bulkRes = await app.inject({
+      method: 'POST',
+      url: '/api/books/bulk-update',
+      payload: {
+        bookIds: [b1.id, b2.id],
+        fields: {
+          type: 'manga',
+          publisher: 'Glénat',
+          authors: [{ name: 'Akira Toriyama', role: 'author' }],
+        },
+      },
+    });
+    expect(bulkRes.statusCode).toBe(200);
+    const body = bulkRes.json();
+    expect(body.updatedCount).toBe(2);
+    expect(body.books[0]).toMatchObject({
+      id: b1.id,
+      title: 'Dragon Ball Tome 1',
+      subtitle: 'Ancienne édition',
+      publisher: 'Glénat',
+      type: 'manga',
+      authors: [{ name: 'Akira Toriyama', role: 'author' }],
+    });
+    expect(body.books[1]).toMatchObject({
+      id: b2.id,
+      title: 'Dragon Ball Tome 2',
+      subtitle: 'Tome 2',
+      publisher: 'Glénat',
+      type: 'manga',
+      authors: [{ name: 'Akira Toriyama', role: 'author' }],
+    });
+
+    // FTS search on the newly applied author and publisher finds both books
+    const searchToriyama = await app.inject({
+      method: 'GET',
+      url: '/api/books?q=toriyama',
+    });
+    expect(searchToriyama.json()).toHaveLength(2);
+
+    const searchGlenat = await app.inject({
+      method: 'GET',
+      url: '/api/books?q=glenat',
+    });
+    expect(searchGlenat.json()).toHaveLength(2);
+  });
 });

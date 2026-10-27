@@ -347,6 +347,39 @@ export const api = {
     }).then((r) => handleResponse<BookDto>(r));
   },
 
+  bulkMoveBooks(data: {
+    bookIds: number[];
+    fromCollectionId?: number | null;
+    toCollectionId: number;
+  }): Promise<{ updatedCount: number; books: BookDto[] }> {
+    return apiFetch('/api/books/bulk-move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).then((r) =>
+      handleResponse<{ updatedCount: number; books: BookDto[] }>(r),
+    );
+  },
+
+  bulkUpdateBooks(data: {
+    bookIds: number[];
+    fields: {
+      type?: BookType;
+      publisher?: string | null;
+      subtitle?: string | null;
+      authors?: BookAuthor[];
+      collectionIds?: number[];
+    };
+  }): Promise<{ updatedCount: number; books: BookDto[] }> {
+    return apiFetch('/api/books/bulk-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }).then((r) =>
+      handleResponse<{ updatedCount: number; books: BookDto[] }>(r),
+    );
+  },
+
   deleteBook(bookId: number): Promise<void> {
     return apiFetch(`/api/books/${bookId}`, {
       method: 'DELETE',

@@ -34,7 +34,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
   return (
     <div className="login-shell">
       <div className="card login-card">
-        <h1>Ma Bibliothèque</h1>
+        <div className="login-brand">
+          <img
+            src="/icon.svg"
+            alt="Emblème Chouette et Livre"
+            className="brand-icon login-logo"
+          />
+          <h1>Ma Bibliothèque</h1>
+        </div>
         <p className="login-subtitle">
           Connectez-vous pour accéder à la bibliothèque
         </p>

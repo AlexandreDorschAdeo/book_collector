@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   api,
   AUTHOR_ROLE_LABELS,
@@ -59,6 +59,39 @@ export function CatalogScreen({
 
   // Delete confirmation state
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
+  // Refs for modal auto-focus
+  const editTitleInputRef = useRef<HTMLInputElement | null>(null);
+  const moveToSelectRef = useRef<HTMLSelectElement | null>(null);
+
+  useEffect(() => {
+    if (showForm) {
+      editTitleInputRef.current?.focus();
+    }
+  }, [showForm, editingBook]);
+
+  useEffect(() => {
+    if (movingBook) {
+      moveToSelectRef.current?.focus();
+    }
+  }, [movingBook]);
+
+  useEffect(() => {
+    if (!showForm && !movingBook) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (showForm) {
+          setShowForm(false);
+          setEditingBook(null);
+        }
+        if (movingBook) {
+          setMovingBook(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showForm, movingBook]);
 
   const loadBooks = async () => {
     try {
@@ -154,6 +187,7 @@ export function CatalogScreen({
     const firstCol = book.collections[0]?.id ?? 0;
     const otherCol =
       collections.find((c) => c.id !== firstCol)?.id ?? firstCol;
+    setError(null);
     setMovingBook(book);
     setMoveFromId(firstCol);
     setMoveToId(otherCol);
@@ -191,7 +225,7 @@ export function CatalogScreen({
         <h2>Bibliothèque</h2>
       </div>
 
-      {error && (
+      {error && !showForm && !movingBook && (
         <div role="alert" className="alert alert-error">
           {error}
         </div>
@@ -260,210 +294,283 @@ export function CatalogScreen({
       </div>
 
       {showForm && (
-        <form onSubmit={handleSaveBook} className="card book-form">
-          <h3>{editingBook ? 'Modifier le livre' : 'Nouveau livre'}</h3>
-          <div className="form-top-layout">
-            <div className="form-cover-col">
-              <CoverPicker
-                currentCoverUrl={
-                  formRemoveCover
-                    ? null
-                    : (formCoverDataUrl ?? formCoverSourceUrl)
-                }
-                onCoverChange={(sel) => {
-                  if (sel.removeCover) {
-                    setFormCoverDataUrl(null);
-                    setFormCoverSourceUrl(null);
-                    setFormRemoveCover(true);
-                  } else if (sel.coverDataUrl) {
-                    setFormCoverDataUrl(sel.coverDataUrl);
-                    setFormCoverSourceUrl(null);
-                    setFormRemoveCover(false);
-                  }
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            setShowForm(false);
+            setEditingBook(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={editingBook ? 'Modifier le livre' : 'Nouveau livre'}
+            className="card modal-dialog"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3>{editingBook ? 'Modifier le livre' : 'Nouveau livre'}</h3>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm modal-close-btn"
+                aria-label="Fermer la fenêtre"
+                onClick={() => {
+                  setShowForm(false);
+                  setEditingBook(null);
                 }}
-              />
+              >
+                ✕
+              </button>
             </div>
-
-            <div className="form-fields-col">
-              <div className="field">
-                <label htmlFor="book-title">Titre *</label>
-                <input
-                  id="book-title"
-                  value={formTitle}
-                  onChange={(e) => setFormTitle(e.target.value)}
-                />
+            {error && (
+              <div role="alert" className="alert alert-error">
+                {error}
               </div>
-              <div className="field">
-                <label htmlFor="book-subtitle">Sous-titre / Série &amp; Tome</label>
-                <input
-                  id="book-subtitle"
-                  value={formSubtitle}
-                  onChange={(e) => setFormSubtitle(e.target.value)}
-                />
-              </div>
-              <div className="field-row-2">
-                <div className="field">
-                  <label htmlFor="book-publisher">Maison d&apos;édition</label>
-                  <input
-                    id="book-publisher"
-                    value={formPublisher}
-                    onChange={(e) => setFormPublisher(e.target.value)}
+            )}
+            <form onSubmit={handleSaveBook} className="book-form">
+              <div className="form-top-layout">
+                <div className="form-cover-col">
+                  <CoverPicker
+                    currentCoverUrl={
+                      formRemoveCover
+                        ? null
+                        : (formCoverDataUrl ?? formCoverSourceUrl)
+                    }
+                    onCoverChange={(sel) => {
+                      if (sel.removeCover) {
+                        setFormCoverDataUrl(null);
+                        setFormCoverSourceUrl(null);
+                        setFormRemoveCover(true);
+                      } else if (sel.coverDataUrl) {
+                        setFormCoverDataUrl(sel.coverDataUrl);
+                        setFormCoverSourceUrl(null);
+                        setFormRemoveCover(false);
+                      }
+                    }}
                   />
                 </div>
-                <div className="field">
-                  <label htmlFor="book-type">Type *</label>
-                  <select
-                    id="book-type"
-                    value={formType}
-                    onChange={(e) => setFormType(e.target.value as BookType)}
-                  >
-                    <option value="book">Livre</option>
-                    <option value="bd">BD</option>
-                    <option value="manga">Manga</option>
-                    <option value="comic">Comic book</option>
-                  </select>
+
+                <div className="form-fields-col">
+                  <div className="field">
+                    <label htmlFor="book-title">Titre *</label>
+                    <input
+                      id="book-title"
+                      ref={editTitleInputRef}
+                      value={formTitle}
+                      onChange={(e) => setFormTitle(e.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="book-subtitle">
+                      Sous-titre / Série &amp; Tome
+                    </label>
+                    <input
+                      id="book-subtitle"
+                      value={formSubtitle}
+                      onChange={(e) => setFormSubtitle(e.target.value)}
+                    />
+                  </div>
+                  <div className="field-row-2">
+                    <div className="field">
+                      <label htmlFor="book-publisher">
+                        Maison d&apos;édition
+                      </label>
+                      <input
+                        id="book-publisher"
+                        value={formPublisher}
+                        onChange={(e) => setFormPublisher(e.target.value)}
+                      />
+                    </div>
+                    <div className="field">
+                      <label htmlFor="book-type">Type *</label>
+                      <select
+                        id="book-type"
+                        value={formType}
+                        onChange={(e) =>
+                          setFormType(e.target.value as BookType)
+                        }
+                      >
+                        <option value="book">Livre</option>
+                        <option value="bd">BD</option>
+                        <option value="manga">Manga</option>
+                        <option value="comic">Comic book</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label htmlFor="book-isbn">ISBN</label>
+                    <input
+                      id="book-isbn"
+                      value={formIsbn}
+                      onChange={(e) => setFormIsbn(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
-              <div className="field">
-                <label htmlFor="book-isbn">ISBN</label>
-                <input
-                  id="book-isbn"
-                  value={formIsbn}
-                  onChange={(e) => setFormIsbn(e.target.value)}
-                />
-              </div>
-            </div>
-          </div>
 
-          <fieldset className="authors-fieldset">
-            <legend>Auteurs *</legend>
-            {formAuthors.map((author, idx) => (
-              <div key={idx} className="author-row">
-                <input
-                  aria-label={`Nom de l'auteur ${idx + 1}`}
-                  placeholder="Nom de l'auteur"
-                  value={author.name}
-                  onChange={(e) => {
-                    const copy = [...formAuthors];
-                    copy[idx] = { ...copy[idx], name: e.target.value };
-                    setFormAuthors(copy);
-                  }}
-                />
-                <select
-                  aria-label={`Rôle de l'auteur ${idx + 1}`}
-                  value={author.role}
-                  onChange={(e) => {
-                    const copy = [...formAuthors];
-                    copy[idx] = {
-                      ...copy[idx],
-                      role: e.target.value as AuthorRole,
-                    };
-                    setFormAuthors(copy);
+              <fieldset className="authors-fieldset">
+                <legend>Auteurs *</legend>
+                {formAuthors.map((author, idx) => (
+                  <div key={idx} className="author-row">
+                    <input
+                      aria-label={`Nom de l'auteur ${idx + 1}`}
+                      placeholder="Nom de l'auteur"
+                      value={author.name}
+                      onChange={(e) => {
+                        const copy = [...formAuthors];
+                        copy[idx] = { ...copy[idx], name: e.target.value };
+                        setFormAuthors(copy);
+                      }}
+                    />
+                    <select
+                      aria-label={`Rôle de l'auteur ${idx + 1}`}
+                      value={author.role}
+                      onChange={(e) => {
+                        const copy = [...formAuthors];
+                        copy[idx] = {
+                          ...copy[idx],
+                          role: e.target.value as AuthorRole,
+                        };
+                        setFormAuthors(copy);
+                      }}
+                    >
+                      <option value="author">Auteur</option>
+                      <option value="writer">Scénariste</option>
+                      <option value="illustrator">Dessinateur</option>
+                    </select>
+                    {formAuthors.length > 1 && (
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() =>
+                          setFormAuthors(formAuthors.filter((_, i) => i !== idx))
+                        }
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() =>
+                    setFormAuthors([
+                      ...formAuthors,
+                      { name: '', role: 'author' },
+                    ])
+                  }
+                >
+                  + Ajouter un auteur
+                </button>
+              </fieldset>
+
+              <fieldset className="collections-fieldset">
+                <legend>Collections *</legend>
+                <div className="collections-checks">
+                  {collections.map((c) => (
+                    <label key={c.id} className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={formCollectionIds.includes(c.id)}
+                        onChange={() => toggleCollectionInForm(c.id)}
+                      />
+                      {c.name} {c.location ? `(${c.location})` : ''}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <div className="card-actions">
+                <button type="submit" className="btn btn-primary">
+                  Enregistrer le livre
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setShowForm(false);
+                    setEditingBook(null);
                   }}
                 >
-                  <option value="author">Auteur</option>
-                  <option value="writer">Scénariste</option>
-                  <option value="illustrator">Dessinateur</option>
-                </select>
-                {formAuthors.length > 1 && (
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() =>
-                      setFormAuthors(formAuthors.filter((_, i) => i !== idx))
-                    }
-                  >
-                    ✕
-                  </button>
-                )}
+                  Annuler
+                </button>
               </div>
-            ))}
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() =>
-                setFormAuthors([...formAuthors, { name: '', role: 'author' }])
-              }
-            >
-              + Ajouter un auteur
-            </button>
-          </fieldset>
-
-          <fieldset className="collections-fieldset">
-            <legend>Collections *</legend>
-            <div className="collections-checks">
-              {collections.map((c) => (
-                <label key={c.id} className="checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={formCollectionIds.includes(c.id)}
-                    onChange={() => toggleCollectionInForm(c.id)}
-                  />
-                  {c.name} {c.location ? `(${c.location})` : ''}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-
-          <div className="card-actions">
-            <button type="submit" className="btn btn-primary">
-              Enregistrer le livre
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setShowForm(false)}
-            >
-              Annuler
-            </button>
+            </form>
           </div>
-        </form>
+        </div>
       )}
 
       {movingBook && (
-        <form onSubmit={handleMoveSubmit} className="card move-form">
-          <h3>Déplacer « {movingBook.title} »</h3>
-          <div className="field">
-            <label htmlFor="move-from">Depuis la collection</label>
-            <select
-              id="move-from"
-              value={moveFromId}
-              onChange={(e) => setMoveFromId(Number(e.target.value))}
-            >
-              {movingBook.collections.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} {c.location ? `(${c.location})` : ''}
-                </option>
-              ))}
-            </select>
+        <div className="modal-backdrop" onClick={() => setMovingBook(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Déplacer « ${movingBook.title} »`}
+            className="card modal-dialog modal-dialog-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h3>Déplacer « {movingBook.title} »</h3>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm modal-close-btn"
+                aria-label="Fermer la fenêtre"
+                onClick={() => setMovingBook(null)}
+              >
+                ✕
+              </button>
+            </div>
+            {error && (
+              <div role="alert" className="alert alert-error">
+                {error}
+              </div>
+            )}
+            <form onSubmit={handleMoveSubmit} className="move-form">
+              <div className="field">
+                <label htmlFor="move-from">Depuis la collection</label>
+                <select
+                  id="move-from"
+                  value={moveFromId}
+                  onChange={(e) => setMoveFromId(Number(e.target.value))}
+                >
+                  {movingBook.collections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.location ? `(${c.location})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="move-to">Vers la collection</label>
+                <select
+                  id="move-to"
+                  ref={moveToSelectRef}
+                  value={moveToId}
+                  onChange={(e) => setMoveToId(Number(e.target.value))}
+                >
+                  {collections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.location ? `(${c.location})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="card-actions">
+                <button type="submit" className="btn btn-primary">
+                  Valider le déplacement
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setMovingBook(null)}
+                >
+                  Annuler
+                </button>
+              </div>
+            </form>
           </div>
-          <div className="field">
-            <label htmlFor="move-to">Vers la collection</label>
-            <select
-              id="move-to"
-              value={moveToId}
-              onChange={(e) => setMoveToId(Number(e.target.value))}
-            >
-              {collections.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} {c.location ? `(${c.location})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="card-actions">
-            <button type="submit" className="btn btn-primary">
-              Valider le déplacement
-            </button>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => setMovingBook(null)}
-            >
-              Annuler
-            </button>
-          </div>
-        </form>
+        </div>
       )}
 
       <div className="books-list">

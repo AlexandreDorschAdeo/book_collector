@@ -1,4 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <rect width="128" height="128" rx="24" fill="#1e293b"/>
-  <path d="M28 32h28c6 0 8 4 8 8v56c0-4-2-6-8-6H28V32zm72 0H72c-6 0-8 4-8 8v56c0-4 2-6 8-6h28V32z" fill="#38bdf8"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Chouette érudite et livre ouvert">
+  <!-- Fond ardoise foncé arrondi -->
+  <rect width="128" height="128" rx="26" fill="#1e293b"/>
+
+  <!-- Halo subtil derrière la chouette -->
+  <circle cx="64" cy="54" r="42" fill="#334155" opacity="0.45"/>
+
+  <!-- Tête de chouette érudite avec aigrettes -->
+  <path d="M34 22 L46 31 C52 28 58 27 64 27 C70 27 76 28 82 31 L94 22 L90 42 C94 49 95 58 92 67 C88 76 77 82 64 82 C51 82 40 76 36 67 C33 58 34 49 38 42 Z" fill="#64748b" stroke="#94a3b8" stroke-width="2.5" stroke-linejoin="round"/>
+
+  <!-- Disque facial de la chouette -->
+  <path d="M42 46 C42 36 52 33 64 38 C76 33 86 36 86 46 C86 58 78 70 64 70 C50 70 42 58 42 46 Z" fill="#cbd5e1"/>
+
+  <!-- Grands yeux dorés -->
+  <circle cx="51" cy="50" r="11" fill="#fbbf24" stroke="#1e293b" stroke-width="2.5"/>
+  <circle cx="77" cy="50" r="11" fill="#fbbf24" stroke="#1e293b" stroke-width="2.5"/>
+
+  <!-- Pupilles et reflets lumineux -->
+  <circle cx="51" cy="50" r="5.5" fill="#0f172a"/>
+  <circle cx="77" cy="50" r="5.5" fill="#0f172a"/>
+  <circle cx="48.5" cy="47.5" r="2.2" fill="#ffffff"/>
+  <circle cx="74.5" cy="47.5" r="2.2" fill="#ffffff"/>
+
+  <!-- Sourcils / Aigrettes expressives -->
+  <path d="M36 36 Q51 42 61 46" fill="none" stroke="#1e293b" stroke-width="3" stroke-linecap="round"/>
+  <path d="M92 36 Q77 42 67 46" fill="none" stroke="#1e293b" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Bec losange ambré -->
+  <polygon points="64,53 59,61 64,68 69,61" fill="#f59e0b" stroke="#1e293b" stroke-width="2" stroke-linejoin="round"/>
+
+  <!-- Livre ouvert bleu ciel au premier plan -->
+  <path d="M22 72 C36 70 52 74 64 81 C76 74 92 70 106 72 L106 104 C92 102 76 106 64 112 C52 106 36 102 22 104 Z" fill="#0284c7"/>
+  <path d="M25 68 C38 66 53 70 64 77 C75 70 90 66 103 68 L103 98 C90 96 75 100 64 106 C53 100 38 96 25 98 Z" fill="#38bdf8" stroke="#bae6fd" stroke-width="2" stroke-linejoin="round"/>
+
+  <!-- Reliure centrale et lignes de pages -->
+  <line x1="64" y1="77" x2="64" y2="106" stroke="#0369a1" stroke-width="3" stroke-linecap="round"/>
+  <path d="M33 78 C43 77 52 79 58 83" fill="none" stroke="#e0f2fe" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M33 86 C43 85 52 87 58 91" fill="none" stroke="#e0f2fe" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M95 78 C85 77 76 79 70 83" fill="none" stroke="#e0f2fe" stroke-width="2.2" stroke-linecap="round"/>
+  <path d="M95 86 C85 85 76 87 70 91" fill="none" stroke="#e0f2fe" stroke-width="2.2" stroke-linecap="round"/>
+
+  <!-- Petites serres posées sur le livre -->
+  <ellipse cx="48" cy="70" rx="4.5" ry="2.8" fill="#f59e0b" stroke="#1e293b" stroke-width="1.5"/>
+  <ellipse cx="80" cy="70" rx="4.5" ry="2.8" fill="#f59e0b" stroke="#1e293b" stroke-width="1.5"/>
 </svg>
+
