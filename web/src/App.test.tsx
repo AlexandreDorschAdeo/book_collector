@@ -168,6 +168,107 @@ describe('CatalogScreen (3.3)', () => {
       );
     });
   });
+
+  it('opens centered modal dialogs for Modifier and Déplacer with automatic focus and Escape closing', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'getBooks').mockResolvedValue([
+      {
+        id: 10,
+        isbn13: '9782012101333',
+        title: 'Astérix',
+        subtitle: 'Astérix le Gaulois',
+        publisher: 'Hachette',
+        coverUrl: null,
+        authors: [{ name: 'René Goscinny', role: 'writer' }],
+        type: 'bd',
+        collections: [{ id: 1, name: 'BD', location: 'Salon' }],
+        createdAt: '2026-10-26T00:00:00Z',
+      },
+    ]);
+    const updateBookSpy = vi.spyOn(api, 'updateBook').mockResolvedValue({
+      id: 10,
+      isbn13: '9782012101333',
+      title: 'Astérix — Édition Luxe',
+      subtitle: 'Astérix le Gaulois',
+      publisher: 'Hachette',
+      coverUrl: null,
+      authors: [{ name: 'René Goscinny', role: 'writer' }],
+      type: 'bd',
+      collections: [{ id: 1, name: 'BD', location: 'Salon' }],
+      createdAt: '2026-10-26T00:00:00Z',
+    });
+    const moveBookSpy = vi.spyOn(api, 'moveBook').mockResolvedValue({
+      id: 10,
+      isbn13: '9782012101333',
+      title: 'Astérix — Édition Luxe',
+      subtitle: 'Astérix le Gaulois',
+      publisher: 'Hachette',
+      coverUrl: null,
+      authors: [{ name: 'René Goscinny', role: 'writer' }],
+      type: 'bd',
+      collections: [{ id: 2, name: 'Mangas', location: 'Maison de campagne' }],
+      createdAt: '2026-10-26T00:00:00Z',
+    });
+
+    render(
+      <CatalogScreen
+        collections={sampleCollections}
+        selectedCollectionId={null}
+        onSelectCollection={vi.fn()}
+        onCollectionsChanged={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(await screen.findByText('Astérix')).toBeInTheDocument();
+
+    // Open Edit modal -> auto-focuses Title input
+    await user.click(screen.getByRole('button', { name: /^Modifier$/i }));
+    const editDialog = screen.getByRole('dialog', {
+      name: /Modifier le livre/i,
+    });
+    expect(editDialog).toHaveAttribute('aria-modal', 'true');
+    const titleInput = screen.getByLabelText(/^Titre \*/i);
+    expect(titleInput).toHaveFocus();
+
+    // Close modal with Escape
+    await user.keyboard('{Escape}');
+    expect(
+      screen.queryByRole('dialog', { name: /Modifier le livre/i }),
+    ).not.toBeInTheDocument();
+
+    // Reopen Edit modal and save
+    await user.click(screen.getByRole('button', { name: /^Modifier$/i }));
+    const reopenedTitleInput = screen.getByLabelText(/^Titre \*/i);
+    await user.clear(reopenedTitleInput);
+    await user.type(reopenedTitleInput, 'Astérix — Édition Luxe');
+    await user.click(
+      screen.getByRole('button', { name: /Enregistrer le livre/i }),
+    );
+    expect(updateBookSpy).toHaveBeenCalledWith(
+      10,
+      expect.objectContaining({ title: 'Astérix — Édition Luxe' }),
+    );
+    expect(
+      screen.queryByRole('dialog', { name: /Modifier le livre/i }),
+    ).not.toBeInTheDocument();
+
+    // Open Move modal -> auto-focuses "Vers la collection" select
+    await user.click(screen.getByRole('button', { name: /^Déplacer$/i }));
+    const moveDialog = screen.getByRole('dialog', {
+      name: /Déplacer « Astérix »/i,
+    });
+    expect(moveDialog).toHaveAttribute('aria-modal', 'true');
+    const moveToSelect = screen.getByLabelText(/Vers la collection/i);
+    expect(moveToSelect).toHaveFocus();
+
+    await user.click(
+      screen.getByRole('button', { name: /Valider le déplacement/i }),
+    );
+    expect(moveBookSpy).toHaveBeenCalledWith(10, 1, 2);
+    expect(
+      screen.queryByRole('dialog', { name: /Déplacer « Astérix »/i }),
+    ).not.toBeInTheDocument();
+  });
 });
 
 describe('BarcodeScanner (6.1)', () => {
@@ -748,10 +849,13 @@ describe('App shell', () => {
 
     render(<App />);
 
-    // Login screen is displayed
+    // Login screen is displayed with the Owl & Book emblem
     expect(
       await screen.findByText(/Connectez-vous pour accéder à la bibliothèque/i),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole('img', { name: /Emblème Chouette et Livre/i }),
+    ).toHaveAttribute('src', '/icon.svg');
 
     await user.type(screen.getByLabelText(/Identifiant/i), 'lecteur');
     await user.type(screen.getByLabelText(/Mot de passe/i), 'lecteur123');
@@ -763,9 +867,12 @@ describe('App shell', () => {
     expect(await screen.findByText('Astérix')).toBeInTheDocument();
     expect(screen.getByText(/👤 lecteur/)).toBeInTheDocument();
 
-    // "Ajouter un livre", "Modifier", "Supprimer" are hidden for read-only user
+    // "Ajouter un livre", "Actions groupées", "Modifier", "Supprimer" are hidden for read-only user
     expect(
       screen.queryByRole('button', { name: /^Ajouter un livre$/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /^Actions groupées$/i }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /^Modifier$/i }),
@@ -773,5 +880,135 @@ describe('App shell', () => {
     expect(
       screen.queryByRole('button', { name: /^Supprimer$/i }),
     ).not.toBeInTheDocument();
+  });
+
+  it('supports bulk selection, bulk move, and bulk field update in the Actions groupées tab', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'getMe').mockResolvedValue({
+      id: 1,
+      username: 'admin',
+      canAddBooks: true,
+      canEditBooks: true,
+      canDeleteBooks: true,
+      canManageUsers: true,
+      createdAt: '2026-10-26T00:00:00Z',
+    });
+    vi.spyOn(api, 'getCollections').mockResolvedValue(sampleCollections);
+    vi.spyOn(api, 'getBooks').mockResolvedValue([
+      {
+        id: 10,
+        isbn13: '9782012101333',
+        title: 'Astérix',
+        subtitle: 'Tome 1',
+        publisher: 'Hachette',
+        coverUrl: null,
+        authors: [{ name: 'René Goscinny', role: 'writer' }],
+        type: 'bd',
+        collections: [{ id: 1, name: 'BD', location: 'Salon' }],
+        createdAt: '2026-10-26T00:00:00Z',
+      },
+      {
+        id: 11,
+        isbn13: '9782205056334',
+        title: 'Blacksad',
+        subtitle: 'Tome 1',
+        publisher: 'Dargaud',
+        coverUrl: null,
+        authors: [{ name: 'Juan Díaz Canales', role: 'writer' }],
+        type: 'bd',
+        collections: [{ id: 1, name: 'BD', location: 'Salon' }],
+        createdAt: '2026-10-26T00:00:00Z',
+      },
+    ]);
+    const bulkMoveSpy = vi.spyOn(api, 'bulkMoveBooks').mockResolvedValue({
+      updatedCount: 2,
+      books: [],
+    });
+    const bulkUpdateSpy = vi.spyOn(api, 'bulkUpdateBooks').mockResolvedValue({
+      updatedCount: 2,
+      books: [],
+    });
+
+    render(<App />);
+
+    // Open Actions groupées tab
+    const bulkTabBtn = await screen.findByRole('button', {
+      name: /^Actions groupées$/i,
+    });
+    await user.click(bulkTabBtn);
+
+    expect(
+      await screen.findByRole('heading', { name: /Actions groupées/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('0 livre(s) sélectionné(s)')).toBeInTheDocument();
+
+    // Select all books
+    await user.click(
+      screen.getByRole('button', { name: /Tout sélectionner/i }),
+    );
+    expect(screen.getByText('2 livre(s) sélectionné(s)')).toBeInTheDocument();
+
+    // Bulk move modal
+    await user.click(
+      screen.getByRole('button', { name: /Déplacer la sélection/i }),
+    );
+    const moveModal = screen.getByRole('dialog', {
+      name: /Déplacer la sélection en lot/i,
+    });
+    expect(moveModal).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByLabelText(/Vers la collection/i)).toHaveFocus();
+
+    await user.click(
+      screen.getByRole('button', { name: /Valider le déplacement en lot/i }),
+    );
+    expect(bulkMoveSpy).toHaveBeenCalledWith({
+      bookIds: [10, 11],
+      fromCollectionId: 1,
+      toCollectionId: 2,
+    });
+    expect(
+      await screen.findByText(/2 livre\(s\) déplacé\(s\) avec succès/i),
+    ).toBeInTheDocument();
+
+    // Select books individually and run bulk edit
+    await user.click(screen.getByLabelText(/Sélectionner Astérix/i));
+    await user.click(screen.getByLabelText(/Sélectionner Blacksad/i));
+    expect(screen.getByText('2 livre(s) sélectionné(s)')).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole('button', { name: /Modifier la sélection/i }),
+    );
+    const editModal = screen.getByRole('dialog', {
+      name: /Modifier la sélection en lot/i,
+    });
+    expect(editModal).toHaveAttribute('aria-modal', 'true');
+
+    // Toggle Publisher and Type fields
+    await user.click(screen.getByLabelText(/Appliquer le type/i));
+    await user.selectOptions(
+      screen.getByLabelText(/Type à appliquer/i),
+      'comic',
+    );
+    await user.click(
+      screen.getByLabelText(/Appliquer la maison d'édition/i),
+    );
+    await user.type(
+      screen.getByLabelText(/Maison d'édition à appliquer/i),
+      'Dupuis',
+    );
+
+    await user.click(
+      screen.getByRole('button', { name: /Appliquer les modifications/i }),
+    );
+    expect(bulkUpdateSpy).toHaveBeenCalledWith({
+      bookIds: [10, 11],
+      fields: {
+        type: 'comic',
+        publisher: 'Dupuis',
+      },
+    });
+    expect(
+      await screen.findByText(/2 livre\(s\) modifié\(s\) avec succès/i),
+    ).toBeInTheDocument();
   });
 });

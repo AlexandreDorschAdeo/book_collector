@@ -2,11 +2,12 @@ import React, { useEffect, useState } from 'react';
 import { api, CollectionDto, UserDto } from './api';
 import { CollectionsScreen } from './components/CollectionsScreen';
 import { CatalogScreen } from './components/CatalogScreen';
+import { BulkActionsScreen } from './components/BulkActionsScreen';
 import { ScanScreen } from './components/ScanScreen';
 import { SettingsScreen } from './components/SettingsScreen';
 import { LoginScreen } from './components/LoginScreen';
 
-type ActiveTab = 'scan' | 'catalog' | 'collections' | 'settings';
+type ActiveTab = 'scan' | 'catalog' | 'bulk' | 'collections' | 'settings';
 
 export function App() {
   const [authChecking, setAuthChecking] = useState(true);
@@ -86,6 +87,11 @@ export function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
+          <img
+            src="/icon.svg"
+            alt="Emblème Chouette et Livre"
+            className="brand-icon"
+          />
           <h1>Ma Bibliothèque</h1>
         </div>
         <nav className="app-nav" aria-label="Navigation principale">
@@ -93,32 +99,65 @@ export function App() {
             <button
               type="button"
               className={`nav-btn ${activeTab === 'scan' ? 'active' : ''}`}
+              aria-label="Ajouter un livre"
+              title="Ajouter un livre"
               onClick={() => setActiveTab('scan')}
             >
-              Ajouter un livre
+              <span className="nav-icon" aria-hidden="true">
+                ➕
+              </span>{' '}
+              <span className="nav-label">Ajouter</span>
             </button>
           )}
           <button
             type="button"
             className={`nav-btn ${activeTab === 'catalog' ? 'active' : ''}`}
+            aria-label="Bibliothèque"
+            title="Bibliothèque"
             onClick={() => setActiveTab('catalog')}
           >
-            Bibliothèque
+            <span className="nav-icon" aria-hidden="true">
+              📚
+            </span>{' '}
+            <span className="nav-label">Bibliothèque</span>
           </button>
+          {currentUser.canEditBooks && (
+            <button
+              type="button"
+              className={`nav-btn ${activeTab === 'bulk' ? 'active' : ''}`}
+              aria-label="Actions groupées"
+              title="Actions groupées"
+              onClick={() => setActiveTab('bulk')}
+            >
+              <span className="nav-icon" aria-hidden="true">
+                ☑️
+              </span>{' '}
+              <span className="nav-label">Actions groupées</span>
+            </button>
+          )}
           <button
             type="button"
             className={`nav-btn ${activeTab === 'collections' ? 'active' : ''}`}
+            aria-label="Collections"
+            title="Collections"
             onClick={() => setActiveTab('collections')}
           >
-            Collections
+            <span className="nav-icon" aria-hidden="true">
+              🗂️
+            </span>{' '}
+            <span className="nav-label">Collections</span>
           </button>
           <button
             type="button"
             className={`nav-btn ${activeTab === 'settings' ? 'active' : ''}`}
             aria-label="Paramétrage"
+            title="Paramétrage"
             onClick={() => setActiveTab('settings')}
           >
-            ⚙️ Paramétrage
+            <span className="nav-icon" aria-hidden="true">
+              ⚙️
+            </span>{' '}
+            <span className="nav-label">Paramétrage</span>
           </button>
         </nav>
         <div className="user-bar">
@@ -150,6 +189,12 @@ export function App() {
             onCollectionsChanged={loadCollections}
             canEditBooks={currentUser.canEditBooks}
             canDeleteBooks={currentUser.canDeleteBooks}
+          />
+        )}
+        {activeTab === 'bulk' && currentUser.canEditBooks && (
+          <BulkActionsScreen
+            collections={collections}
+            onCollectionsChanged={loadCollections}
           />
         )}
         {activeTab === 'collections' && (
